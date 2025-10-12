@@ -1,0 +1,612 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Meshtastic WebSerial (Minimal)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Leaflet (no SRI so it won't get blocked by mismatched hashes) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- protobuf.js runtime -->
+  <script defer src="https://cdn.jsdelivr.net/npm/protobufjs@7.2.6/dist/protobuf.min.js"></script>
+  <style>
+    :root { --bg:#0f1220; --panel:#151a2d; --soft:#1b2240; --text:#e7e8ee; --muted:#9aa3b2; --accent:#5ee3a6; }
+    *{box-sizing:border-box}
+    html, body { height:100%; overflow:hidden; } /* lock page scroll; panes scroll independently */
+    body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,Segoe UI,Roboto,Inter,Arial}
+    header{display:flex;gap:8px;align-items:center;padding:10px 12px;background:var(--panel);position:sticky;top:0;z-index:5;border-bottom:1px solid #1e2546}
+    button,select,input[type="text"]{background:#222a4a;color:var(--text);border:1px solid #2e386b;border-radius:8px;padding:8px 10px}
+    button:hover{background:#27305b} button:disabled{opacity:.5;cursor:not-allowed}
+    .main{display:grid;grid-template-columns:320px 1fr;height:calc(100vh - 54px)}
+    .sidebar{border-right:1px solid #1e2546;display:flex;flex-direction:column;min-width:280px;min-height:0}
+    .side-top{padding:10px;border-bottom:1px solid #1e2546}
+    .nodes{overflow:auto;flex:1;min-height:0} /* independent scroll area */
+    .node{padding:10px;border-bottom:1px solid #1e2546;cursor:pointer}
+    .node:hover{background:#1a2040}
+    .node .name{font-weight:600}
+    .metrics{font-size:12px;color:var(--muted);display:flex;gap:8px;flex-wrap:wrap}
+    .content{display:flex;flex-direction:column;min-height:0}
+    .tabs{display:flex;gap:6px;padding:8px;border-bottom:1px solid #1e2546}
+    .tab{padding:8px 10px;border-radius:8px;cursor:pointer;background:#1a2040;color:var(--muted)}
+    .tab.active{background:var(--soft);color:var(--text)}
+    .views{position:relative;flex:1;min-height:0}
+    .view{position:absolute;inset:0;display:none}
+    .view.active{display:flex}
+    #map{height:100%;width:100%}
+    .chat{flex:1;display:flex;flex-direction:column;min-height:0}
+    .msgs{flex:1;overflow:auto;padding:12px}
+    .msg{max-width:70%;padding:8px 10px;border-radius:10px;margin:6px 0;white-space:pre-wrap}
+    .me{background:#2c365f;margin-left:auto}
+    .them{background:#1c2347}
+    .composer{display:flex;gap:8px;padding:10px;border-top:1px solid #1e2546;background:var(--panel)}
+    .log{font-family:ui-monospace,Consolas,monospace;font-size:12px;padding:10px;white-space:pre-wrap;overflow:auto}
+    .status{margin-left:auto;color:var(--muted)}
+    .badge{display:inline-block;padding:2px 6px;border-radius:6px;font-size:12px;background:#20335a}
+    .ok{color:var(--accent)}
+    .warn{color:#ffd166}
+    .err{color:#ff6666}
+  </style>
+</head>
+<body>
+<header>
+  <strong>Meshtastic WebSerial (Minimal)</strong>
+  <button id="btnRequest">Choose Port…</button>
+  <button id="btnConnect" disabled>Connect @ 115200</button>
+  <button id="btnRefresh" disabled>Refresh NodeDB</button>
+  <button id="btnDisconnect" disabled>Disconnect</button>
+  <span id="portInfo" class="status">Not connected</span>
+</header>
+
+<div class="main">
+  <aside class="sidebar">
+    <div class="side-top">
+      <div><span class="badge">Nodes</span> <span id="nodeCount">0</span></div>
+    </div>
+    <div id="nodes" class="nodes"></div>
+  </aside>
+
+  <section class="content">
+    <div class="tabs">
+      <div class="tab active" data-view="chatView">Chat</div>
+      <div class="tab" data-view="mapView">Map</div>
+      <div class="tab" data-view="logView">Logs</div>
+      <span id="syncState" class="status"></span>
+    </div>
+    <div class="views">
+      <div id="chatView" class="view active">
+        <div class="chat">
+          <div id="chatHeader" style="padding:8px 12px;border-bottom:1px solid #1e2546;color:var(--muted)">Select a node…</div>
+          <div id="msgs" class="msgs"></div>
+          <div class="composer">
+            <input id="msgText" type="text" placeholder="Type message…" style="flex:1" />
+            <button id="btnSend" disabled>Send</button>
+          </div>
+        </div>
+      </div>
+      <div id="mapView" class="view">
+        <div id="map"></div>
+      </div>
+      <div id="logView" class="view">
+        <div id="log" class="log"></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+(() => {
+  // ---------- UI helpers ----------
+  const $ = sel => document.querySelector(sel);
+  const logEl = $('#log');
+  function log(line, cls='') {
+    const span = document.createElement('div');
+    if (cls) span.classList.add(cls);
+    span.textContent = line;
+    logEl.appendChild(span);
+    logEl.scrollTop = logEl.scrollHeight;
+    console.debug(line);
+  }
+
+  // ---------- Leaflet map ----------
+  let map, markers = new Map();
+  function initMap() {
+    if (map) return;
+    map = L.map('map', { zoomControl: true }).setView([0, 0], 2);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+  }
+
+  function getLatLonFromPos(pos) {
+    if (!pos) return null;
+    // support multiple schema variants
+    if (typeof pos.latitude_i === 'number' && typeof pos.longitude_i === 'number')
+      return [pos.latitude_i / 1e7, pos.longitude_i / 1e7];
+    if (typeof pos.latitudeI === 'number' && typeof pos.longitudeI === 'number')
+      return [pos.latitudeI / 1e7, pos.longitudeI / 1e7];
+    if (typeof pos.latitude === 'number' && typeof pos.longitude === 'number')
+      return [pos.latitude, pos.longitude];
+    return null;
+  }
+
+  function upsertMarker(node) {
+    const ll = getLatLonFromPos(node.position);
+    if (!ll) return;
+    if (!map) initMap(); // ensure map exists even if Map tab not opened yet
+    const [lat, lon] = ll;
+    const label = (node.user?.long_name || node.user?.short_name || node.user?.id || node.num.toString());
+    const last = node.last_heard ? new Date(node.last_heard * 1000).toLocaleString() : '—';
+    const popup = `<b>${escapeHtml(label)}</b><br/>#${node.num}<br/>Last heard: ${last}`;
+
+    if (markers.has(node.num)) {
+      const m = markers.get(node.num);
+      m.setLatLng([lat, lon]).bindPopup(popup);
+    } else {
+      const m = L.marker([lat, lon]).addTo(map).bindPopup(popup);
+      markers.set(node.num, m);
+    }
+  }
+
+  function fitMapToMarkers() {
+    if (!map) return;
+    const ls = Array.from(markers.values()).map(m => m.getLatLng());
+    if (!ls.length) return;
+    const group = L.featureGroup(Array.from(markers.values()));
+    map.fitBounds(group.getBounds(), { padding: [24, 24] });
+  }
+
+  // ---------- Tabs ----------
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+      tab.classList.add('active');
+      const v = document.getElementById(tab.dataset.view);
+      v.classList.add('active');
+      if (v.id === 'mapView') {
+        initMap();
+        fitMapToMarkers();
+        setTimeout(() => map.invalidateSize(), 50);
+      }
+    });
+  });
+
+  // ---------- Simple state ----------
+  let port = null;
+  let reader = null, writer = null;
+  let readLoopAbortController = null;
+  let allowed = false;
+  let PROTO = null;       // protobuf root namespace
+  let Types = {};         // decoded types cache
+  const BAUD = 115200;
+
+  const nodes = new Map(); // num -> NodeInfo
+  let selectedNodeNum = null;
+  let lastWantConfigNonce = null;
+
+  // ---------- Build just-enough .proto schema (from official defs) ----------
+  const protoSrc = `
+    syntax = "proto3";
+    package meshtastic;
+
+    enum PortNum {
+      UNKNOWN_APP = 0;
+      TEXT_MESSAGE_APP = 1;
+    }
+
+    message Data {
+      PortNum portnum = 1;
+      bytes   payload = 2;
+      bool    want_response = 3;
+      fixed32 dest = 4;
+      fixed32 source = 5;
+      fixed32 request_id = 6;
+      fixed32 reply_id = 7;
+      fixed32 emoji = 8;
+      optional uint32 bitfield = 9;
+    }
+
+    message MeshPacket {
+      fixed32 from = 1;
+      fixed32 to   = 2;
+      uint32  channel = 3;
+      oneof payload_variant {
+        Data  decoded = 4;
+        bytes encrypted = 5;
+      }
+      fixed32 id = 6;
+      fixed32 rx_time = 7;
+    }
+
+    message Position {
+      optional sfixed32 latitude_i  = 1;
+      optional sfixed32 longitude_i = 2;
+      optional int32    altitude    = 3;
+      optional fixed32  time        = 4;
+    }
+
+    message DeviceMetrics {
+      uint32 battery_level = 1;
+      float  voltage = 2;
+      float  channel_utilization = 3;
+      float  air_util_tx = 4;
+    }
+
+    message User {
+      string id = 1;
+      string long_name = 2;
+      string short_name = 3;
+      bytes  macaddr = 4 [deprecated = true];
+      int32  hw_model = 5;
+      bool   is_licensed = 6;
+      bytes  public_key = 8;
+      optional bool is_unmessagable = 9;
+    }
+
+    message NodeInfo {
+      uint32 num = 1;
+      User   user = 2;
+      Position position = 3;
+      float  snr = 4;
+      fixed32 last_heard = 5;
+      DeviceMetrics device_metrics = 6;
+      uint32 channel = 7;
+      bool   via_mqtt = 8;
+      optional uint32 hops_away = 9;
+    }
+
+    message MyNodeInfo {
+      uint32 my_node_num = 1;
+      uint32 reboot_count = 8;
+      uint32 min_app_version = 11;
+      bytes  device_id = 12;
+      string pio_env = 13;
+      uint32 nodedb_count = 15;
+    }
+
+    message Config {}
+
+    message Heartbeat { uint32 nonce = 1; }
+
+    message FromRadio {
+      uint32 id = 1;
+      oneof payload_variant {
+        MeshPacket packet = 2;
+        MyNodeInfo my_info = 3;
+        NodeInfo   node_info = 4;
+        Config     config = 5;
+        uint32     config_complete_id = 7;
+        bool       rebooted = 8;
+      }
+    }
+
+    message ToRadio {
+      oneof payload_variant {
+        MeshPacket packet = 1;
+        uint32     want_config_id = 3;
+        bool       disconnect = 4;
+        Heartbeat  heartbeat = 7;
+      }
+    }
+  `;
+
+  // ---------- Protobuf bootstrap ----------
+  async function initProtobuf() {
+    if (PROTO) return;
+    const parsed = protobuf.parse(protoSrc, { keepCase: true });
+    PROTO = parsed.root;
+    Types.ToRadio = PROTO.lookupType('meshtastic.ToRadio');
+    Types.FromRadio = PROTO.lookupType('meshtastic.FromRadio');
+    Types.MeshPacket = PROTO.lookupType('meshtastic.MeshPacket');
+    Types.Data = PROTO.lookupType('meshtastic.Data');
+    Types.NodeInfo = PROTO.lookupType('meshtastic.NodeInfo');
+    Types.MyNodeInfo = PROTO.lookupType('meshtastic.MyNodeInfo');
+    Types.Position = PROTO.lookupType('meshtastic.Position');
+    Types.DeviceMetrics = PROTO.lookupType('meshtastic.DeviceMetrics');
+    log('Protobufs loaded ✓', 'ok');
+  }
+
+  // ---------- Serial helpers ----------
+  function textDecoder() { return new TextDecoder(); }
+  const encoder = new TextEncoder();
+
+  function makeHeader(len) {
+    // 0x94, 0xC3, MSB(len), LSB(len) — big-endian length
+    const header = new Uint8Array(4);
+    header[0] = 0x94; header[1] = 0xC3;
+    header[2] = (len >>> 8) & 0xff;
+    header[3] = (len) & 0xff;
+    return header;
+  }
+
+  async function writeToRadio(obj) {
+    const payload = Types.ToRadio.encode(Types.ToRadio.create(obj)).finish();
+    const header = makeHeader(payload.length);
+    const buf = new Uint8Array(header.length + payload.length);
+    buf.set(header, 0); buf.set(payload, header.length);
+    await writer.write(buf);
+  }
+
+  // ---------- Reading loop & framing ----------
+  async function startReadLoop() {
+    readLoopAbortController = new AbortController();
+    const signal = readLoopAbortController.signal;
+    const stream = port.readable;
+    reader = stream.getReader();
+    let acc = new Uint8Array(0);
+
+    const HEADER0 = 0x94, HEADER1 = 0xC3;
+    const MAX_LEN = 512;
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+
+        // Append to accumulator
+        const tmp = new Uint8Array(acc.length + value.length);
+        tmp.set(acc, 0); tmp.set(value, acc.length);
+        acc = tmp;
+
+        // Try to parse frames
+        parse: while (acc.length >= 4) {
+          // Find header
+          let i = 0;
+          while (i + 1 < acc.length && !(acc[i] === HEADER0 && acc[i+1] === HEADER1)) i++;
+          if (i + 3 >= acc.length) {
+            // No full header yet; purge ASCII log prior to partial header
+            if (i > 0) {
+              const ascii = textDecoder().decode(acc.subarray(0, i));
+              if (ascii.trim().length) log(ascii.trim());
+              acc = acc.subarray(i);
+            }
+            break parse;
+          }
+          // Dump any ASCII before header
+          if (i > 0) {
+            const ascii = textDecoder().decode(acc.subarray(0, i));
+            if (ascii.trim().length) log(ascii.trim());
+            acc = acc.subarray(i);
+          }
+
+          if (acc.length < 4) break parse;
+          const len = (acc[2] << 8) | acc[3];
+          if (len > MAX_LEN) {
+            log(`Bad length ${len}, dropping header`, 'warn');
+            acc = acc.subarray(2);
+            continue;
+          }
+          if (acc.length < 4 + len) break parse;
+          const pb = acc.subarray(4, 4 + len);
+          acc = acc.subarray(4 + len);
+
+          try {
+            const msg = Types.FromRadio.decode(pb);
+            handleFromRadio(msg);
+          } catch (e) {
+            log('Decode error: ' + e.message, 'err');
+          }
+        }
+      }
+    } catch (e) {
+      if (!signal.aborted) log('Read loop error: ' + e.message, 'err');
+    } finally {
+      try { reader.releaseLock(); } catch {}
+    }
+  }
+
+  // ---------- Protocol handlers ----------
+  function handleFromRadio(fr) {
+    if (fr.my_info) {
+      const count = fr.my_info.nodedb_count || 0;
+      $('#syncState').textContent = `Syncing NodeDB… (${count} nodes expected)`;
+      return;
+    }
+    if (fr.node_info) {
+      const n = fr.node_info;
+      nodes.set(n.num, deepClone(n));
+      renderNodes();
+      upsertMarker(n);
+      return;
+    }
+    if (fr.config_complete_id != null) {
+      if (lastWantConfigNonce && fr.config_complete_id === lastWantConfigNonce) {
+        $('#syncState').textContent = 'Sync complete';
+        fitMapToMarkers(); // zoom after full dump
+      }
+      return;
+    }
+    if (fr.packet && fr.packet.decoded) {
+      const d = fr.packet.decoded;
+      if (d.portnum === 1 && d.payload) {
+        const txt = safeUtf8(d.payload);
+        const from = fr.packet.from;
+        const who = nodes.get(from)?.user?.long_name || nodes.get(from)?.user?.short_name || `#${from}`;
+        addMsg({ who, text: txt, mine: false, from });
+      }
+      return;
+    }
+  }
+
+  function deepClone(o){return JSON.parse(JSON.stringify(o));}
+  function safeUtf8(buf) { return new TextDecoder().decode(buf instanceof Uint8Array ? buf : new Uint8Array(buf)); }
+
+  // ---------- UI rendering ----------
+  function renderNodes() {
+    const list = $('#nodes');
+    list.innerHTML = '';
+    const arr = Array.from(nodes.values()).sort((a,b)=> (b.last_heard||0)-(a.last_heard||0));
+    $('#nodeCount').textContent = arr.length;
+    arr.forEach(n => {
+      const div = document.createElement('div');
+      div.className = 'node';
+      const title = n.user?.long_name || n.user?.short_name || n.user?.id || `#${n.num}`;
+      const batt = n.device_metrics?.battery_level;
+      const volt = n.device_metrics?.voltage;
+      const last = n.last_heard ? new Date(n.last_heard * 1000).toLocaleTimeString() : '—';
+
+      // Position string supports *_i and float
+      let posStr = '—';
+      const ll = getLatLonFromPos(n.position);
+      if (ll) posStr = `${ll[0].toFixed(5)}, ${ll[1].toFixed(5)}`;
+
+      div.innerHTML = `
+        <div class="name">${escapeHtml(title)}</div>
+        <div class="metrics">
+          <span>#${n.num}</span>
+          <span>last: ${last}</span>
+          ${batt!=null ? `<span>bat: ${batt}%</span>` : ``}
+          ${Number.isFinite(volt) ? `<span>${volt.toFixed(2)}V</span>` : ``}
+          <span>pos: ${posStr}</span>
+        </div>`;
+      div.addEventListener('click', () => {
+        selectedNodeNum = n.num;
+        $('#chatHeader').textContent = `Chat with ${title} (#${n.num})`;
+        $('#btnSend').disabled = false;
+      });
+      list.appendChild(div);
+    });
+  }
+
+  function addMsg({who, text, mine=false}) {
+    const wrap = document.createElement('div');
+    wrap.className = 'msg ' + (mine ? 'me' : 'them');
+    wrap.textContent = (mine ? text : `${who}: ${text}`);
+    $('#msgs').appendChild(wrap);
+    const msgs = $('#msgs'); msgs.scrollTop = msgs.scrollHeight;
+  }
+
+  function escapeHtml(s){return (s??'').toString().replace(/[&<>"']/g,c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]))}
+
+  // ---------- Connect / handshake ----------
+  async function connect() {
+    await initProtobuf();
+    if (!port) throw new Error('No port chosen');
+    if (!(port.readable || port.writable)) {
+      await port.open({ baudRate: BAUD, dataBits: 8, stopBits: 1, parity: "none", flowControl: "none" });
+    }
+    writer = port.writable.getWriter();
+    $('#portInfo').textContent = 'Connected @ '+BAUD;
+
+    nodes.clear(); renderNodes();
+    markers.forEach(m=>m.remove()); markers.clear();
+    $('#syncState').textContent = 'Syncing NodeDB…';
+    startReadLoop();
+
+    await requestNodeDb();     // start NodeDB
+    startHeartbeat();          // keepalive
+  }
+
+  async function requestNodeDb() {
+    lastWantConfigNonce = (Math.random() * 0xffffffff) >>> 0;
+    log(`Requesting NodeDB (nonce=${lastWantConfigNonce})`, 'ok');
+    await writeToRadio({ want_config_id: lastWantConfigNonce });
+  }
+
+  let hbTimer = null;
+  function startHeartbeat() {
+    stopHeartbeat();
+    hbTimer = setInterval(async () => {
+      try {
+        const n = (Math.random() * 0xffffffff) >>> 0;
+        await writeToRadio({ heartbeat: { nonce: n }});
+      } catch(e) {
+        log('Heartbeat failed: '+e.message, 'warn');
+      }
+    }, 8000);
+  }
+  function stopHeartbeat(){ if (hbTimer) { clearInterval(hbTimer); hbTimer=null; } }
+
+  async function disconnect() {
+    stopHeartbeat();
+    try {
+      if (writer) {
+        try { await writeToRadio({ disconnect: true }); } catch {}
+        writer.releaseLock();
+      }
+      if (readLoopAbortController) readLoopAbortController.abort();
+      if (reader) reader.releaseLock();
+      if (port) await port.close();
+    } catch (e) {
+      log('Disconnect error: '+e.message, 'err');
+    } finally {
+      writer = null; reader = null;
+      $('#portInfo').textContent = 'Not connected';
+      $('#btnSend').disabled = true;
+      $('#btnRefresh').disabled = true;
+      $('#btnDisconnect').disabled = true;
+      $('#btnConnect').disabled = !allowed;
+      $('#syncState').textContent = '';
+    }
+  }
+
+  // ---------- Messaging ----------
+  async function sendText(toNodeNum, text) {
+    if (!writer) throw new Error('Not connected');
+    const payloadBytes = encoder.encode(text);
+    const data = { portnum: 1, payload: payloadBytes, want_response: false, dest: toNodeNum >>> 0 };
+    const mp = { to: toNodeNum >>> 0, decoded: data };
+    await writeToRadio({ packet: mp });
+    addMsg({ who: 'me', text, mine: true });
+  }
+
+  // ---------- Buttons ----------
+  $('#btnRequest').onclick = async () => {
+    if (!('serial' in navigator)) {
+      alert('WebSerial not supported in this browser.');
+      return;
+    }
+    try {
+      port = await navigator.serial.requestPort({});
+      allowed = true;
+      $('#portInfo').textContent = 'Port chosen';
+      $('#btnConnect').disabled = false;
+    } catch (e) {
+      if (e && e.name !== 'NotFoundError') log('requestPort: ' + e.message, 'err');
+    }
+  };
+
+  $('#btnConnect').onclick = async () => {
+    try {
+      $('#btnConnect').disabled = true;
+      $('#btnDisconnect').disabled = false;
+      $('#btnRefresh').disabled = false;
+      await connect();
+    } catch (e) {
+      log('Failed to open serial port: ' + e.message, 'err');
+      $('#btnConnect').disabled = !allowed;
+      console.warn('If on Linux and seeing NetworkError: try: DEV=$(ls -1 /dev/ttyACM* /dev/ttyUSB* 2>/dev/null | head -n1); sudo setfacl -m u:"$USER":rw "$DEV"');
+    }
+  };
+
+  $('#btnRefresh').onclick = async () => {
+    try { await requestNodeDb(); } catch(e){ log('Refresh failed: ' + e.message, 'err'); }
+  };
+  $('#btnDisconnect').onclick = disconnect;
+
+  $('#btnSend').onclick = async () => {
+    const text = $('#msgText').value.trim();
+    if (!text || !selectedNodeNum) return;
+    $('#msgText').value = '';
+    try { await sendText(selectedNodeNum, text); } catch (e) { log('Send failed: ' + e.message, 'err'); }
+  };
+  $('#msgText').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#btnSend').click(); }
+  });
+
+  // ---------- Startup ----------
+  (async () => {
+    try {
+      await initProtobuf();
+      const ports = await navigator.serial?.getPorts?.() ?? [];
+      allowed = ports.length > 0;
+      if (allowed) { port = ports[0]; $('#btnConnect').disabled = false; $('#portInfo').textContent = 'Port pre-authorized'; }
+    } catch (e) { /* ignore */ }
+  })();
+
+})();
+</script>
+</body>
+</html>
