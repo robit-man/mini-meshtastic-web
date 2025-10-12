@@ -104,14 +104,17 @@
   // ---------- UI helpers ----------
   const $ = sel => document.querySelector(sel);
   const logEl = $('#log');
-  function stripAnsi(s){ return (s||'').replace(/\x1b\[[0-9;]*[A-Za-z]/g,''); }
+
+  // Quick stateless strip for our own UI messages (won't affect serial carry):
+  const stripAnsiQuick = s => (s||'').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'').replace(/\x1b[@-~]/g,'');
+
   function log(line, cls='') {
     const span = document.createElement('div');
     if (cls) span.classList.add(cls);
-    span.textContent = stripAnsi(line);
+    span.textContent = stripAnsiQuick(line);
     logEl.appendChild(span);
     logEl.scrollTop = logEl.scrollHeight;
-    (cls==='err'?console.error:cls==='warn'?console.warn:console.log)(stripAnsi(line));
+    (cls==='err'?console.error:cls==='warn'?console.warn:console.log)(stripAnsiQuick(line));
   }
   function hex(n){ return '0x' + (n>>>0).toString(16).padStart(8,'0'); }
   function escapeHtml(s){return (s??'').toString().replace(/[&<>"']/g,c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]))}
@@ -217,7 +220,6 @@
   function rememberMsg(key){
     seenMsgs.add(key);
     if (seenMsgs.size > 1000) {
-      // simple pruning
       const it = seenMsgs.values();
       for (let i=0;i<200;i++) { const n = it.next(); if (n.done) break; seenMsgs.delete(n.value); }
     }
@@ -352,56 +354,92 @@
     log('Protobufs loaded ✓', 'ok');
   }
 
-  // ---------- Serial helpers ----------
+  // ---------- Serial ASCII sanitization (handles split ANSI sequences) ----------
   const asciiDecoder = new TextDecoder('utf-8');
   let asciiLineBuffer = '';    // assemble full lines for UI Logs
-  let asciiParseBuffer = '';   // a rolling buffer to parse "Received text msg ..." even if wrapped
+  let asciiParseBuffer = '';   // rolling buffer to parse "Received text msg ..." even if wrapped
+  let ansiCarry = '';          // holds partial ESC sequences that split across chunks
+
+  function cleanAnsiStream(chunkText) {
+    // Prepend leftover partial ANSI from previous chunk
+    let s = ansiCarry + chunkText;
+    ansiCarry = '';
+
+    // Remove full CSI sequences: ESC [ ... final
+    s = s.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+    // Remove full OSC sequences: ESC ] ... BEL or ST
+    s = s.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '');
+    // Remove single-char escapes
+    s = s.replace(/\x1b[@-~]/g, '');
+
+    // If an escape starts near the end but doesn't finish, carry it
+    const escIdx = s.lastIndexOf('\x1b');
+    if (escIdx !== -1) {
+      const tail = s.slice(escIdx);
+      const looksStart = /^\x1b(?:\[|\]|[@-~]|$)/.test(tail);
+      const completeCSI = /^\x1b\[[0-?]*[ -/]*[@-~]/.test(tail);
+      const completeOSC = /^\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/.test(tail);
+      const single = /^\x1b[@-~]/.test(tail);
+      if (looksStart && !(completeCSI || completeOSC || single)) {
+        ansiCarry = tail;
+        s = s.slice(0, escIdx);
+      }
+    }
+    return s;
+  }
 
   function appendAscii(bytes){
-    const chunk = asciiDecoder.decode(bytes, { stream: true });
-    asciiLineBuffer += chunk;
-    asciiParseBuffer += stripAnsi(chunk).replace(/\r/g,''); // for message extraction
+    // Decode chunk (streaming), clean ANSI (including split sequences), normalize CRs
+    const raw = asciiDecoder.decode(bytes, { stream: true });
+    const cleaned = cleanAnsiStream(raw).replace(/\r/g, '');
 
-    // Emit full lines to the Logs pane
+    // Feed Logs pane by whole lines
+    asciiLineBuffer += cleaned;
     const parts = asciiLineBuffer.split('\n');
     asciiLineBuffer = parts.pop();
     for (const line of parts) if (line.trim().length) log(line);
 
-    // Keep only the last few KB for parsing to handle wrapped lines
+    // Feed parser buffer
+    asciiParseBuffer += cleaned;
     if (asciiParseBuffer.length > 8000) asciiParseBuffer = asciiParseBuffer.slice(-4000);
 
-    // Try to extract any "Received text msg ..." from the rolling buffer
+    // Try to extract any "Received text msg ..." lines
     processAsciiBuffer();
   }
+
   function flushAscii(){
     const tail = asciiDecoder.decode();
-    if (tail) { asciiLineBuffer += tail; asciiParseBuffer += stripAnsi(tail).replace(/\r/g,''); }
+    if (tail) {
+      const cleaned = cleanAnsiStream(tail).replace(/\r/g,'');
+      asciiLineBuffer += cleaned;
+      asciiParseBuffer += cleaned;
+    }
     if (asciiLineBuffer.trim().length) log(asciiLineBuffer);
     asciiLineBuffer = '';
-    processAsciiBuffer();
+    if (asciiParseBuffer.length > 0) processAsciiBuffer();
   }
 
-  // Extract "Received text msg from=0x849ac7f4, id=0x..., msg=..."
+  // Extract "Received text msg from=0x..., id=0x..., msg=..."
   function processAsciiBuffer(){
-    // normalize spaces/newlines so wrapped words still match
-    const buf = asciiParseBuffer.replace(/[ \t]+/g,' ')
-                                .replace(/(\S)-\n(\S)/g,'$1$2')  // hyphenated wraps
-                                .replace(/\n+/g,' ');
+    // Normalize whitespace so wrapped words still match
+    const buf = asciiParseBuffer
+      .replace(/[ \t]+/g,' ')
+      .replace(/(\S)-\n(\S)/g,'$1$2')  // hyphenated wraps
+      .replace(/\n+/g,' ');
 
-    // Optional 'to=0x…' may appear; tolerate arbitrary order/spacing until msg=
+    // Tolerate arbitrary order between "from", "id", "to" (until "msg=")
     const rx = /Received\s+text\s+msg\s+from=0x([0-9a-fA-F]{1,8})(?:(?!msg=).)*?\bid=0x([0-9a-fA-F]+)(?:(?!msg=).)*?\bmsg=([^\n\r]+)/gi;
-    // We’ll also look for optional to=0x… if present
     const rxTo = /\bto=0x([0-9a-fA-F]{1,8})\b/i;
 
     let m, lastIndexUsed = -1;
     while ((m = rx.exec(buf)) !== null) {
-      const fromHex = m[1]; const idHex = m[2]; let text = m[3] || '';
-      // Trim trailing ANSI or stray words after message (rare)
-      text = text.trim();
+      const fromHex = m[1];
+      const idHex = m[2];
+      let text = (m[3] || '').trim();
 
-      // Narrow a window around this match to search for "to=0x…"
-      const start = Math.max(0, m.index - 120);
-      const end   = Math.min(buf.length, m.index + m[0].length + 120);
+      // Look around the match window for possible "to=0x…"
+      const start = Math.max(0, m.index - 160);
+      const end   = Math.min(buf.length, m.index + m[0].length + 160);
       const windowStr = buf.slice(start, end);
       const mt = rxTo.exec(windowStr);
       const toHex = mt ? mt[1] : null;
@@ -409,22 +447,20 @@
       const srcDec = parseInt(fromHex, 16) >>> 0;
       const dstDec = toHex ? (parseInt(toHex,16)>>>0) : (myNodeNum ?? 0);
 
-      // Dedup between ASCII & protobuf paths
       const key = makeDedupKey(srcDec, idHex, text);
-      if (seenMsgs.has(key)) continue;
+      if (seenMsgs.has(key)) { lastIndexUsed = m.index + m[0].length; continue; }
       rememberMsg(key);
 
-      // Route and paint
       onInboundText({ srcDec, dstDec, text, idHex, via: 'ascii' });
       lastIndexUsed = m.index + m[0].length;
     }
 
-    // If we matched something, we can drop the used prefix to avoid reprocessing
     if (lastIndexUsed >= 0) {
       asciiParseBuffer = buf.slice(lastIndexUsed);
     }
   }
 
+  // ---------- Framing / Write ----------
   const encoder = new TextEncoder();
 
   function makeHeader(len) {
@@ -533,7 +569,6 @@
     return headerText.includes(hx);
   }
 
-  // Ensure the sender exists in our nodes map so it shows in the list
   function ensureStubNode(numDec){
     if (nodes.has(numDec)) return;
     nodes.set(numDec, {
@@ -551,7 +586,7 @@
     const isBroadcast = (dstDec === 0 || dstDec === BROADCAST_NUM);
     const whoName = nodes.get(srcDec)?.user?.long_name || nodes.get(srcDec)?.user?.short_name || `#${srcDec}`;
 
-    // Update sender last_heard to bubble in list
+    // Update sender last_heard
     const n = nodes.get(srcDec);
     if (n) { n.last_heard = Math.floor(Date.now()/1000); nodes.set(srcDec, n); renderNodes(); }
 
@@ -559,7 +594,7 @@
       threadAppend(BROADCAST_NUM, { me:false, text, ts:Date.now(), from:srcDec, to:dstDec, via });
       if (isViewingThreadFor(BROADCAST_NUM)) addMsg({ who: whoName, text, mine: false });
 
-      // Also mirror to sender’s DM
+      // Mirror to sender’s DM
       threadAppend(srcDec, { me:false, text, ts:Date.now(), from:srcDec, to:dstDec, via });
       if (isViewingThreadFor(srcDec)) addMsg({ who: whoName, text, mine: false });
     } else {
@@ -601,7 +636,6 @@
         const d = p.decoded;
         const portnum = d.portnum|0;
 
-        // Source/dest: prefer envelope; fallback to decoded if non-zero
         const envFrom = (p.from>>>0);
         const envTo   = (p.to>>>0);
         const src = (Number.isInteger(d.source) && d.source !== 0) ? (d.source>>>0) : envFrom;
