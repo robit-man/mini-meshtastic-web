@@ -9,8 +9,10 @@
   <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <!-- protobuf.js runtime -->
   <script defer src="https://cdn.jsdelivr.net/npm/protobufjs@7.2.6/dist/protobuf.min.js"></script>
+  <!-- pako for compressed text (port 7) -->
+  <script defer src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
   <style>
-    :root { --bg:#0f1220; --panel:#151a2d; --soft:#1b2240; --text:#e7e8ee; --muted:#9aa3b2; --accent:#5ee3a6; }
+    :root { --bg:#0f1220; --panel:#151a2d; --soft:#1b2240; --text:#e7e8ee; --muted:#9aa3b2; --accent:#5ee3a6; --sel:#242b52; }
     *{box-sizing:border-box}
     html, body { height:100%; overflow:hidden; } /* lock page scroll; panes scroll independently */
     body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,Segoe UI,Roboto,Inter,Arial}
@@ -23,6 +25,7 @@
     .nodes{overflow:auto;flex:1;min-height:0} /* independent scroll area */
     .node{padding:10px;border-bottom:1px solid #1e2546;cursor:pointer}
     .node:hover{background:#1a2040}
+    .node.selected{background:var(--sel)}
     .node .name{font-weight:600}
     .metrics{font-size:12px;color:var(--muted);display:flex;gap:8px;flex-wrap:wrap}
     .content{display:flex;flex-direction:column;min-height:0}
@@ -45,6 +48,7 @@
     .ok{color:var(--accent)}
     .warn{color:#ffd166}
     .err{color:#ff6666}
+    .chip{display:inline-block;background:#20335a;border:1px solid #2a3b52;color:#c3d6ea;padding:2px 8px;border-radius:999px;font-size:12px;cursor:pointer;user-select:none}
   </style>
 </head>
 <body>
@@ -60,7 +64,13 @@
 <div class="main">
   <aside class="sidebar">
     <div class="side-top">
-      <div><span class="badge">Nodes</span> <span id="nodeCount">0</span></div>
+      <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap">
+        <div><span class="badge">Nodes</span> <span id="nodeCount">0</span></div>
+        <div style="display:flex;gap:8px">
+          <div id="publicChip" class="chip" title="Open Public thread (^all ch0)">Public</div>
+        </div>
+      </div>
+      <div id="selfInfo" class="metrics" style="margin-top:6px;color:#9aa3b2"></div>
     </div>
     <div id="nodes" class="nodes"></div>
   </aside>
@@ -75,7 +85,7 @@
     <div class="views">
       <div id="chatView" class="view active">
         <div class="chat">
-          <div id="chatHeader" style="padding:8px 12px;border-bottom:1px solid #1e2546;color:var(--muted)">Select a node…</div>
+          <div id="chatHeader" style="padding:8px 12px;border-bottom:1px solid #1e2546;color:var(--muted)">Select a node or <b>Public</b>…</div>
           <div id="msgs" class="msgs"></div>
           <div class="composer">
             <input id="msgText" type="text" placeholder="Type message…" style="flex:1" />
@@ -83,12 +93,8 @@
           </div>
         </div>
       </div>
-      <div id="mapView" class="view">
-        <div id="map"></div>
-      </div>
-      <div id="logView" class="view">
-        <div id="log" class="log"></div>
-      </div>
+      <div id="mapView" class="view"><div id="map"></div></div>
+      <div id="logView" class="view"><div id="log" class="log"></div></div>
     </div>
   </section>
 </div>
@@ -98,14 +104,17 @@
   // ---------- UI helpers ----------
   const $ = sel => document.querySelector(sel);
   const logEl = $('#log');
+  function stripAnsi(s){ return (s||'').replace(/\x1b\[[0-9;]*[A-Za-z]/g,''); }
   function log(line, cls='') {
     const span = document.createElement('div');
     if (cls) span.classList.add(cls);
-    span.textContent = line;
+    span.textContent = stripAnsi(line);
     logEl.appendChild(span);
     logEl.scrollTop = logEl.scrollHeight;
-    console.debug(line);
+    (cls==='err'?console.error:cls==='warn'?console.warn:console.log)(stripAnsi(line));
   }
+  function hex(n){ return '0x' + (n>>>0).toString(16).padStart(8,'0'); }
+  function escapeHtml(s){return (s??'').toString().replace(/[&<>"']/g,c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]))}
 
   // ---------- Leaflet map ----------
   let map, markers = new Map();
@@ -113,14 +122,11 @@
     if (map) return;
     map = L.map('map', { zoomControl: true }).setView([0, 0], 2);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '&copy; OpenStreetMap contributors'
+      maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
     }).addTo(map);
   }
-
   function getLatLonFromPos(pos) {
     if (!pos) return null;
-    // support multiple schema variants
     if (typeof pos.latitude_i === 'number' && typeof pos.longitude_i === 'number')
       return [pos.latitude_i / 1e7, pos.longitude_i / 1e7];
     if (typeof pos.latitudeI === 'number' && typeof pos.longitudeI === 'number')
@@ -129,16 +135,14 @@
       return [pos.latitude, pos.longitude];
     return null;
   }
-
   function upsertMarker(node) {
     const ll = getLatLonFromPos(node.position);
     if (!ll) return;
-    if (!map) initMap(); // ensure map exists even if Map tab not opened yet
+    if (!map) initMap();
     const [lat, lon] = ll;
     const label = (node.user?.long_name || node.user?.short_name || node.user?.id || node.num.toString());
     const last = node.last_heard ? new Date(node.last_heard * 1000).toLocaleString() : '—';
-    const popup = `<b>${escapeHtml(label)}</b><br/>#${node.num}<br/>Last heard: ${last}`;
-
+    const popup = `<b>${escapeHtml(label)}</b><br/>#${node.num} (${hex(node.num)})<br/>Last heard: ${last}`;
     if (markers.has(node.num)) {
       const m = markers.get(node.num);
       m.setLatLng([lat, lon]).bindPopup(popup);
@@ -147,12 +151,11 @@
       markers.set(node.num, m);
     }
   }
-
   function fitMapToMarkers() {
     if (!map) return;
-    const ls = Array.from(markers.values()).map(m => m.getLatLng());
-    if (!ls.length) return;
-    const group = L.featureGroup(Array.from(markers.values()));
+    const vals = Array.from(markers.values());
+    if (!vals.length) return;
+    const group = L.featureGroup(vals);
     map.fitBounds(group.getBounds(), { padding: [24, 24] });
   }
 
@@ -164,28 +167,63 @@
       tab.classList.add('active');
       const v = document.getElementById(tab.dataset.view);
       v.classList.add('active');
-      if (v.id === 'mapView') {
-        initMap();
-        fitMapToMarkers();
-        setTimeout(() => map.invalidateSize(), 50);
-      }
+      if (v.id === 'mapView') { initMap(); fitMapToMarkers(); setTimeout(() => map.invalidateSize(), 50); }
     });
   });
+  function activateChatTab(){ document.querySelector('.tab[data-view="chatView"]').click(); }
 
   // ---------- Simple state ----------
   let port = null;
   let reader = null, writer = null;
   let readLoopAbortController = null;
   let allowed = false;
-  let PROTO = null;       // protobuf root namespace
-  let Types = {};         // decoded types cache
+  let PROTO = null; let Types = {};
   const BAUD = 115200;
 
-  const nodes = new Map(); // num -> NodeInfo
-  let selectedNodeNum = null;
-  let lastWantConfigNonce = null;
+  const BROADCAST_NUM = 0xFFFFFFFF >>> 0;
 
-  // ---------- Build just-enough .proto schema (from official defs) ----------
+  const nodes = new Map(); // num -> NodeInfo
+  let selectedNodeNum = null; // BROADCAST_NUM => public
+  let lastWantConfigNonce = null;
+  let myNodeNum = null;
+
+  // ---------- Threads (localStorage) ----------
+  const STORAGE_KEY = 'meshtastic_threads_v9';
+  let threads = loadThreads();
+  function loadThreads(){ try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { return {}; } }
+  function saveThreads(){ try { localStorage.setItem(STORAGE_KEY, JSON.stringify(threads)); } catch {} }
+  function threadKeyFor(num){
+    const n = Number(num);
+    return (n === BROADCAST_NUM || n === 0) ? 'public' : String(n >>> 0);
+  }
+  function threadGet(num){
+    const k = threadKeyFor(num);
+    if(!threads[k]) threads[k] = [];
+    return threads[k];
+  }
+  function threadAppend(num, entry){
+    const k = threadKeyFor(num);
+    if(!threads[k]) threads[k] = [];
+    threads[k].push(entry);
+    if (threads[k].length > 500) threads[k] = threads[k].slice(-500);
+    saveThreads();
+  }
+
+  // Dedup (works for both protobuf & ASCII-derived)
+  const seenMsgs = new Set(); // key: `${srcHex}|${idHex}|${text}`
+  function makeDedupKey(srcDec, idHex, text){
+    return `${hex(srcDec).toLowerCase()}|${String(idHex).toLowerCase()}|${text}`;
+  }
+  function rememberMsg(key){
+    seenMsgs.add(key);
+    if (seenMsgs.size > 1000) {
+      // simple pruning
+      const it = seenMsgs.values();
+      for (let i=0;i<200;i++) { const n = it.next(); if (n.done) break; seenMsgs.delete(n.value); }
+    }
+  }
+
+  // ---------- Build just-enough .proto schema (DO NOT OMIT) ----------
   const protoSrc = `
     syntax = "proto3";
     package meshtastic;
@@ -193,6 +231,10 @@
     enum PortNum {
       UNKNOWN_APP = 0;
       TEXT_MESSAGE_APP = 1;
+      POSITION_APP = 3;
+      ROUTING_APP = 4;
+      TELEMETRY_APP = 5;
+      TEXT_MESSAGE_COMPRESSED_APP = 7;
     }
 
     message Data {
@@ -289,6 +331,8 @@
         Heartbeat  heartbeat = 7;
       }
     }
+
+    message Text { string text = 1; }
   `;
 
   // ---------- Protobuf bootstrap ----------
@@ -304,22 +348,92 @@
     Types.MyNodeInfo = PROTO.lookupType('meshtastic.MyNodeInfo');
     Types.Position = PROTO.lookupType('meshtastic.Position');
     Types.DeviceMetrics = PROTO.lookupType('meshtastic.DeviceMetrics');
+    Types.Text = PROTO.lookupType('meshtastic.Text');
     log('Protobufs loaded ✓', 'ok');
   }
 
   // ---------- Serial helpers ----------
-  function textDecoder() { return new TextDecoder(); }
+  const asciiDecoder = new TextDecoder('utf-8');
+  let asciiLineBuffer = '';    // assemble full lines for UI Logs
+  let asciiParseBuffer = '';   // a rolling buffer to parse "Received text msg ..." even if wrapped
+
+  function appendAscii(bytes){
+    const chunk = asciiDecoder.decode(bytes, { stream: true });
+    asciiLineBuffer += chunk;
+    asciiParseBuffer += stripAnsi(chunk).replace(/\r/g,''); // for message extraction
+
+    // Emit full lines to the Logs pane
+    const parts = asciiLineBuffer.split('\n');
+    asciiLineBuffer = parts.pop();
+    for (const line of parts) if (line.trim().length) log(line);
+
+    // Keep only the last few KB for parsing to handle wrapped lines
+    if (asciiParseBuffer.length > 8000) asciiParseBuffer = asciiParseBuffer.slice(-4000);
+
+    // Try to extract any "Received text msg ..." from the rolling buffer
+    processAsciiBuffer();
+  }
+  function flushAscii(){
+    const tail = asciiDecoder.decode();
+    if (tail) { asciiLineBuffer += tail; asciiParseBuffer += stripAnsi(tail).replace(/\r/g,''); }
+    if (asciiLineBuffer.trim().length) log(asciiLineBuffer);
+    asciiLineBuffer = '';
+    processAsciiBuffer();
+  }
+
+  // Extract "Received text msg from=0x849ac7f4, id=0x..., msg=..."
+  function processAsciiBuffer(){
+    // normalize spaces/newlines so wrapped words still match
+    const buf = asciiParseBuffer.replace(/[ \t]+/g,' ')
+                                .replace(/(\S)-\n(\S)/g,'$1$2')  // hyphenated wraps
+                                .replace(/\n+/g,' ');
+
+    // Optional 'to=0x…' may appear; tolerate arbitrary order/spacing until msg=
+    const rx = /Received\s+text\s+msg\s+from=0x([0-9a-fA-F]{1,8})(?:(?!msg=).)*?\bid=0x([0-9a-fA-F]+)(?:(?!msg=).)*?\bmsg=([^\n\r]+)/gi;
+    // We’ll also look for optional to=0x… if present
+    const rxTo = /\bto=0x([0-9a-fA-F]{1,8})\b/i;
+
+    let m, lastIndexUsed = -1;
+    while ((m = rx.exec(buf)) !== null) {
+      const fromHex = m[1]; const idHex = m[2]; let text = m[3] || '';
+      // Trim trailing ANSI or stray words after message (rare)
+      text = text.trim();
+
+      // Narrow a window around this match to search for "to=0x…"
+      const start = Math.max(0, m.index - 120);
+      const end   = Math.min(buf.length, m.index + m[0].length + 120);
+      const windowStr = buf.slice(start, end);
+      const mt = rxTo.exec(windowStr);
+      const toHex = mt ? mt[1] : null;
+
+      const srcDec = parseInt(fromHex, 16) >>> 0;
+      const dstDec = toHex ? (parseInt(toHex,16)>>>0) : (myNodeNum ?? 0);
+
+      // Dedup between ASCII & protobuf paths
+      const key = makeDedupKey(srcDec, idHex, text);
+      if (seenMsgs.has(key)) continue;
+      rememberMsg(key);
+
+      // Route and paint
+      onInboundText({ srcDec, dstDec, text, idHex, via: 'ascii' });
+      lastIndexUsed = m.index + m[0].length;
+    }
+
+    // If we matched something, we can drop the used prefix to avoid reprocessing
+    if (lastIndexUsed >= 0) {
+      asciiParseBuffer = buf.slice(lastIndexUsed);
+    }
+  }
+
   const encoder = new TextEncoder();
 
   function makeHeader(len) {
-    // 0x94, 0xC3, MSB(len), LSB(len) — big-endian length
     const header = new Uint8Array(4);
     header[0] = 0x94; header[1] = 0xC3;
     header[2] = (len >>> 8) & 0xff;
     header[3] = (len) & 0xff;
     return header;
   }
-
   async function writeToRadio(obj) {
     const payload = Types.ToRadio.encode(Types.ToRadio.create(obj)).finish();
     const header = makeHeader(payload.length);
@@ -337,7 +451,7 @@
     let acc = new Uint8Array(0);
 
     const HEADER0 = 0x94, HEADER1 = 0xC3;
-    const MAX_LEN = 512;
+    const MAX_LEN = 4096;
 
     try {
       while (true) {
@@ -345,40 +459,30 @@
         if (done) break;
         if (!value) continue;
 
-        // Append to accumulator
         const tmp = new Uint8Array(acc.length + value.length);
         tmp.set(acc, 0); tmp.set(value, acc.length);
         acc = tmp;
 
-        // Try to parse frames
-        parse: while (acc.length >= 4) {
-          // Find header
+        parse: while (acc.length >= 2) {
           let i = 0;
           while (i + 1 < acc.length && !(acc[i] === HEADER0 && acc[i+1] === HEADER1)) i++;
+
           if (i + 3 >= acc.length) {
-            // No full header yet; purge ASCII log prior to partial header
-            if (i > 0) {
-              const ascii = textDecoder().decode(acc.subarray(0, i));
-              if (ascii.trim().length) log(ascii.trim());
-              acc = acc.subarray(i);
-            }
+            if (i > 0) { appendAscii(acc.subarray(0, i)); acc = acc.subarray(i); }
             break parse;
           }
-          // Dump any ASCII before header
-          if (i > 0) {
-            const ascii = textDecoder().decode(acc.subarray(0, i));
-            if (ascii.trim().length) log(ascii.trim());
-            acc = acc.subarray(i);
-          }
+          if (i > 0) { appendAscii(acc.subarray(0, i)); acc = acc.subarray(i); }
 
           if (acc.length < 4) break parse;
           const len = (acc[2] << 8) | acc[3];
-          if (len > MAX_LEN) {
-            log(`Bad length ${len}, dropping header`, 'warn');
+
+          if (len <= 0 || len > MAX_LEN) {
+            appendAscii(acc.subarray(0, 2));
             acc = acc.subarray(2);
             continue;
           }
           if (acc.length < 4 + len) break parse;
+
           const pb = acc.subarray(4, 4 + len);
           acc = acc.subarray(4 + len);
 
@@ -394,13 +498,85 @@
       if (!signal.aborted) log('Read loop error: ' + e.message, 'err');
     } finally {
       try { reader.releaseLock(); } catch {}
+      flushAscii();
     }
   }
 
-  // ---------- Protocol handlers ----------
+  // ---------- Decode helpers ----------
+  function deepClone(o){return JSON.parse(JSON.stringify(o));}
+  function inflateToString(bytes) {
+    try {
+      const u8 = (bytes instanceof Uint8Array) ? bytes : new Uint8Array(bytes);
+      const out = window.pako ? window.pako.inflate(u8) : null;
+      if (!out) return null;
+      return new TextDecoder().decode(out);
+    } catch { return null; }
+  }
+  function decodeTextPayload(bytes, portnum){
+    if (portnum === 7) {
+      const s = inflateToString(bytes);
+      if (s != null) return s;
+    }
+    try { return new TextDecoder().decode(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)); } catch {}
+    try { const t = Types.Text.decode(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)); if (t && typeof t.text === 'string') return t.text; } catch {}
+    const b = (bytes instanceof Uint8Array) ? bytes : new Uint8Array(bytes);
+    return Array.from(b).map(x=>x.toString(16).padStart(2,'0')).join(' ');
+  }
+
+  function isViewingThreadFor(num){
+    const k = threadKeyFor(selectedNodeNum);
+    const want = threadKeyFor(num);
+    if (k === want) return true;
+    // Also match the hex in the header string
+    const hx = hex(num).toLowerCase();
+    const headerText = ($('#chatHeader').textContent || '').toLowerCase();
+    return headerText.includes(hx);
+  }
+
+  // Ensure the sender exists in our nodes map so it shows in the list
+  function ensureStubNode(numDec){
+    if (nodes.has(numDec)) return;
+    nodes.set(numDec, {
+      num: numDec,
+      user: { id: hex(numDec), short_name: hex(numDec), long_name: hex(numDec) },
+      last_heard: Math.floor(Date.now()/1000)
+    });
+    renderNodes();
+  }
+
+  // Single place to route/store/paint inbound text (used by protobuf & ascii paths)
+  function onInboundText({ srcDec, dstDec, text, idHex = '0', via = 'pb' }) {
+    ensureStubNode(srcDec);
+
+    const isBroadcast = (dstDec === 0 || dstDec === BROADCAST_NUM);
+    const whoName = nodes.get(srcDec)?.user?.long_name || nodes.get(srcDec)?.user?.short_name || `#${srcDec}`;
+
+    // Update sender last_heard to bubble in list
+    const n = nodes.get(srcDec);
+    if (n) { n.last_heard = Math.floor(Date.now()/1000); nodes.set(srcDec, n); renderNodes(); }
+
+    if (isBroadcast) {
+      threadAppend(BROADCAST_NUM, { me:false, text, ts:Date.now(), from:srcDec, to:dstDec, via });
+      if (isViewingThreadFor(BROADCAST_NUM)) addMsg({ who: whoName, text, mine: false });
+
+      // Also mirror to sender’s DM
+      threadAppend(srcDec, { me:false, text, ts:Date.now(), from:srcDec, to:dstDec, via });
+      if (isViewingThreadFor(srcDec)) addMsg({ who: whoName, text, mine: false });
+    } else {
+      threadAppend(srcDec, { me:false, text, ts:Date.now(), from:srcDec, to:dstDec, via });
+      if (isViewingThreadFor(srcDec)) addMsg({ who: whoName, text, mine: false });
+    }
+  }
+
+  // ---------- Protocol handlers (protobuf) ----------
   function handleFromRadio(fr) {
     if (fr.my_info) {
       const count = fr.my_info.nodedb_count || 0;
+      if (typeof fr.my_info.my_node_num === 'number') {
+        myNodeNum = fr.my_info.my_node_num >>> 0;
+        $('#selfInfo').textContent = `Me: #${myNodeNum} (${hex(myNodeNum)})`;
+        log(`My node #: ${myNodeNum} (${hex(myNodeNum)})`, 'ok');
+      }
       $('#syncState').textContent = `Syncing NodeDB… (${count} nodes expected)`;
       return;
     }
@@ -414,40 +590,64 @@
     if (fr.config_complete_id != null) {
       if (lastWantConfigNonce && fr.config_complete_id === lastWantConfigNonce) {
         $('#syncState').textContent = 'Sync complete';
-        fitMapToMarkers(); // zoom after full dump
+        fitMapToMarkers();
       }
       return;
     }
-    if (fr.packet && fr.packet.decoded) {
-      const d = fr.packet.decoded;
-      if (d.portnum === 1 && d.payload) {
-        const txt = safeUtf8(d.payload);
-        const from = fr.packet.from;
-        const who = nodes.get(from)?.user?.long_name || nodes.get(from)?.user?.short_name || `#${from}`;
-        addMsg({ who, text: txt, mine: false, from });
+
+    if (fr.packet) {
+      const p = fr.packet;
+      if (p.decoded) {
+        const d = p.decoded;
+        const portnum = d.portnum|0;
+
+        // Source/dest: prefer envelope; fallback to decoded if non-zero
+        const envFrom = (p.from>>>0);
+        const envTo   = (p.to>>>0);
+        const src = (Number.isInteger(d.source) && d.source !== 0) ? (d.source>>>0) : envFrom;
+        const dstCandidate = (Number.isInteger(d.dest) && d.dest !== 0) ? (d.dest>>>0) : envTo;
+        const isBroadcast = (dstCandidate === 0 || dstCandidate === BROADCAST_NUM);
+        const dst = isBroadcast ? BROADCAST_NUM : dstCandidate;
+
+        if ((portnum === 1 || portnum === 7) && d.payload) {
+          const txt = decodeTextPayload(d.payload, portnum);
+          const idHex = hex(p.id>>>0);
+
+          const key = makeDedupKey(src, idHex, txt);
+          if (!seenMsgs.has(key)) {
+            rememberMsg(key);
+            onInboundText({ srcDec: src, dstDec: dst, text: txt, idHex, via: 'pb' });
+          }
+        }
+      } else if (p.encrypted) {
+        log(`pkt encrypted len=${p.encrypted?.length ?? 0} from=${hex(p.from>>>0)} to=${hex(p.to>>>0)} ch=${p.channel|0}`, 'warn');
       }
       return;
     }
   }
 
-  function deepClone(o){return JSON.parse(JSON.stringify(o));}
-  function safeUtf8(buf) { return new TextDecoder().decode(buf instanceof Uint8Array ? buf : new Uint8Array(buf)); }
-
   // ---------- UI rendering ----------
   function renderNodes() {
     const list = $('#nodes');
     list.innerHTML = '';
+
+    // Public thread at top
+    const publicDiv = document.createElement('div');
+    publicDiv.className = 'node' + ((threadKeyFor(selectedNodeNum)==='public')?' selected':'');
+    publicDiv.innerHTML = `<div class="name">Public <span class="metrics">(^all ch0)</span></div>`;
+    publicDiv.onclick = () => { selectThread(BROADCAST_NUM, 'Public (^all ch0)'); activateChatTab(); };
+    list.appendChild(publicDiv);
+
     const arr = Array.from(nodes.values()).sort((a,b)=> (b.last_heard||0)-(a.last_heard||0));
     $('#nodeCount').textContent = arr.length;
+
     arr.forEach(n => {
       const div = document.createElement('div');
-      div.className = 'node';
+      div.className = 'node' + ((threadKeyFor(selectedNodeNum)===String(n.num))?' selected':'');
       const title = n.user?.long_name || n.user?.short_name || n.user?.id || `#${n.num}`;
       const batt = n.device_metrics?.battery_level;
       const volt = n.device_metrics?.voltage;
       const last = n.last_heard ? new Date(n.last_heard * 1000).toLocaleTimeString() : '—';
-
-      // Position string supports *_i and float
       let posStr = '—';
       const ll = getLatLonFromPos(n.position);
       if (ll) posStr = `${ll[0].toFixed(5)}, ${ll[1].toFixed(5)}`;
@@ -455,19 +655,37 @@
       div.innerHTML = `
         <div class="name">${escapeHtml(title)}</div>
         <div class="metrics">
-          <span>#${n.num}</span>
+          <span>#${n.num} (${hex(n.num)})</span>
           <span>last: ${last}</span>
           ${batt!=null ? `<span>bat: ${batt}%</span>` : ``}
           ${Number.isFinite(volt) ? `<span>${volt.toFixed(2)}V</span>` : ``}
           <span>pos: ${posStr}</span>
         </div>`;
       div.addEventListener('click', () => {
-        selectedNodeNum = n.num;
-        $('#chatHeader').textContent = `Chat with ${title} (#${n.num})`;
-        $('#btnSend').disabled = false;
+        selectThread(n.num, `${title} (#${n.num} | ${hex(n.num)})`);
+        activateChatTab();
       });
       list.appendChild(div);
     });
+  }
+
+  function selectThread(num, title) {
+    selectedNodeNum = num;
+    localStorage.setItem('meshtastic_last_thread', threadKeyFor(num));
+    renderNodes();
+    $('#chatHeader').innerHTML = `Chat with ${escapeHtml(title)}`;
+    $('#btnSend').disabled = (selectedNodeNum==null);
+    renderThread(num);
+  }
+
+  function renderThread(num){
+    const msgsEl = $('#msgs'); msgsEl.innerHTML = '';
+    const data = threadGet(num);
+    for (const m of data) {
+      const who = m.me ? 'me' : (m.from != null ? (nodes.get(m.from)?.user?.short_name || nodes.get(m.from)?.user?.long_name || `#${m.from}`) : 'them');
+      addMsg({ who, text: m.text, mine: !!m.me });
+    }
+    msgsEl.scrollTop = msgsEl.scrollHeight;
   }
 
   function addMsg({who, text, mine=false}) {
@@ -477,8 +695,6 @@
     $('#msgs').appendChild(wrap);
     const msgs = $('#msgs'); msgs.scrollTop = msgs.scrollHeight;
   }
-
-  function escapeHtml(s){return (s??'').toString().replace(/[&<>"']/g,c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]))}
 
   // ---------- Connect / handshake ----------
   async function connect() {
@@ -497,6 +713,15 @@
 
     await requestNodeDb();     // start NodeDB
     startHeartbeat();          // keepalive
+
+    // default to last-used thread if any
+    const lastKey = localStorage.getItem('meshtastic_last_thread');
+    if (lastKey) {
+      if (lastKey === 'public') selectThread(BROADCAST_NUM, 'Public (^all ch0)');
+      else selectThread(Number(lastKey), (nodes.get(Number(lastKey))?.user?.short_name || nodes.get(Number(lastKey))?.user?.long_name || `#${lastKey}`));
+    } else {
+      selectThread(BROADCAST_NUM, 'Public (^all ch0)');
+    }
   }
 
   async function requestNodeDb() {
@@ -512,9 +737,7 @@
       try {
         const n = (Math.random() * 0xffffffff) >>> 0;
         await writeToRadio({ heartbeat: { nonce: n }});
-      } catch(e) {
-        log('Heartbeat failed: '+e.message, 'warn');
-      }
+      } catch(e) { log('Heartbeat failed: '+e.message, 'warn'); }
     }, 8000);
   }
   function stopHeartbeat(){ if (hbTimer) { clearInterval(hbTimer); hbTimer=null; } }
@@ -533,6 +756,7 @@
       log('Disconnect error: '+e.message, 'err');
     } finally {
       writer = null; reader = null;
+      flushAscii();
       $('#portInfo').textContent = 'Not connected';
       $('#btnSend').disabled = true;
       $('#btnRefresh').disabled = true;
@@ -542,22 +766,26 @@
     }
   }
 
-  // ---------- Messaging ----------
+  // ---------- Messaging (DM + Public) ----------
   async function sendText(toNodeNum, text) {
     if (!writer) throw new Error('Not connected');
     const payloadBytes = encoder.encode(text);
-    const data = { portnum: 1, payload: payloadBytes, want_response: false, dest: toNodeNum >>> 0 };
-    const mp = { to: toNodeNum >>> 0, decoded: data };
+
+    // Normalize Public to broadcast numeric (accept 0 or 0xFFFFFFFF)
+    const isPublicSel = (threadKeyFor(toNodeNum) === 'public');
+    const dest = isPublicSel ? (0xFFFFFFFF>>>0) : (toNodeNum>>>0);
+
+    const data = { portnum: 1, payload: payloadBytes, want_response: false, dest };
+    const mp = { to: dest, channel: 0, decoded: data };
     await writeToRadio({ packet: mp });
-    addMsg({ who: 'me', text, mine: true });
+
+    threadAppend(dest, { me:true, text, ts:Date.now(), to:dest });
+    addMsg({ who:'me', text, mine:true });
   }
 
   // ---------- Buttons ----------
   $('#btnRequest').onclick = async () => {
-    if (!('serial' in navigator)) {
-      alert('WebSerial not supported in this browser.');
-      return;
-    }
+    if (!('serial' in navigator)) { alert('WebSerial not supported in this browser.'); return; }
     try {
       port = await navigator.serial.requestPort({});
       allowed = true;
@@ -588,13 +816,18 @@
 
   $('#btnSend').onclick = async () => {
     const text = $('#msgText').value.trim();
-    if (!text || !selectedNodeNum) return;
+    if (!text || selectedNodeNum==null) return;
     $('#msgText').value = '';
-    try { await sendText(selectedNodeNum, text); } catch (e) { log('Send failed: ' + e.message, 'err'); }
+    try {
+      await sendText(selectedNodeNum, text);
+      localStorage.setItem('meshtastic_last_thread', threadKeyFor(selectedNodeNum));
+    } catch (e) { log('Send failed: ' + e.message, 'err'); }
   };
   $('#msgText').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#btnSend').click(); }
   });
+
+  $('#publicChip').onclick = () => { selectThread(BROADCAST_NUM, 'Public (^all ch0)'); activateChatTab(); };
 
   // ---------- Startup ----------
   (async () => {
@@ -604,6 +837,11 @@
       allowed = ports.length > 0;
       if (allowed) { port = ports[0]; $('#btnConnect').disabled = false; $('#portInfo').textContent = 'Port pre-authorized'; }
     } catch (e) { /* ignore */ }
+
+    const lastKey = localStorage.getItem('meshtastic_last_thread');
+    if (lastKey) {
+      $('#chatHeader').innerHTML = `Chat with ${lastKey === 'public' ? 'Public (^all ch0)' : ('#' + lastKey)}`;
+    }
   })();
 
 })();
