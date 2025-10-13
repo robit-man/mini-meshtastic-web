@@ -134,14 +134,102 @@
   const $ = sel => document.querySelector(sel);
   const logEl = $('#log');
   const stripAnsiQuick = s => (s||'').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'').replace(/\x1b[@-~]/g,'');
-  function log(line, cls='') {
-    const span = document.createElement('div');
-    if (cls) span.classList.add(cls);
-    span.textContent = stripAnsiQuick(line);
-    logEl.appendChild(span);
-    logEl.scrollTop = logEl.scrollHeight;
-    (cls==='err'?console.error:cls==='warn'?console.warn:console.log)(stripAnsiQuick(line));
+  // ---- Clean ANSI + robust record splitting (no unterminated regex) ----
+
+// 1) Strip real ANSI, heal broken SGR like "3 4m" -> "34m", then remove stray "34m"/"0m"
+function cleanAnsiStream(chunkText) {
+  let s = ansiCarry + chunkText;
+  ansiCarry = '';
+
+  // CSI (ESC[...), OSC (ESC]...BEL/ESC\), and single-char ESC
+  s = s.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+  s = s.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '');
+  s = s.replace(/\x1b[@-~]/g, '');
+
+  // If an ESC started at the end of this chunk, carry it forward
+  const escIdx = s.lastIndexOf('\x1b');
+  if (escIdx !== -1) {
+    const tail = s.slice(escIdx);
+    const looksStart = /^\x1b(?:\[|\]|[@-~]|$)/.test(tail);
+    const completeCSI = /^\x1b\[[0-?]*[ -/]*[@-~]/.test(tail);
+    const completeOSC = /^\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/.test(tail);
+    const single = /^\x1b[@-~]/.test(tail);
+    if (looksStart && !(completeCSI || completeOSC || single)) {
+      ansiCarry = tail;
+      s = s.slice(0, escIdx);
+    }
   }
+
+  // Heal common broken SGR numbers: "3 4m" -> "34m", "3 2m" -> "32m", "1 00m" -> "100m"
+  // Run twice to catch nested splits.
+  s = s.replace(/\b(\d{1,3})\s+(\d{1,3})m\b/g, '$1$2m')
+       .replace(/\b(\d{1,3})\s+(\d{1,3})m\b/g, '$1$2m');
+
+  // Remove any remaining stray SGR tokens like "0m", "34m", possibly repeated
+  s = s.replace(/(?:\b\d{1,3}m\b\s*)+/g, '');
+
+  // Normalize CRs
+  return s.replace(/\r/g, '');
+}
+
+// 2) A record starts ONLY at level tokens (avoid splitting in "[GPS]" mid-line)
+const START_TOKEN_RX = /^\s*(?:\d{1,3}\s*m\s*)*(?:INFO|DEBUG|WARN|ERROR)\s*\|/;
+const RECORD_SPLIT_RX = /(?=\s*(?:\d{1,3}\s*m\s*)*(?:INFO|DEBUG|WARN|ERROR)\s*\|)/g;
+
+let logPending = '';     // current console-joined record
+let lastLogDiv = null;   // last <div> in the UI log we append to
+
+function splitIntoRecords(clean) {
+  // One chunk can contain multiple records back-to-back with no newline
+  return clean.split(RECORD_SPLIT_RX).filter(Boolean);
+}
+
+function logSingle(clean, cls='') {
+  const startsRecord = START_TOKEN_RX.test(clean) || cls === 'ok' || cls === 'warn' || cls === 'err';
+
+  // New record? flush console line
+  if (startsRecord && logPending) {
+    console.log(logPending);
+    logPending = '';
+    lastLogDiv = null;
+  }
+
+  // UI: new div for new record, else append to the same div (prevents mid-line splits)
+  if (!lastLogDiv || startsRecord) {
+    lastLogDiv = document.createElement('div');
+    if (cls) lastLogDiv.classList.add(cls);
+    lastLogDiv.textContent = clean;
+    logEl.appendChild(lastLogDiv);
+  } else {
+    lastLogDiv.textContent += ' ' + clean;
+  }
+  logEl.scrollTop = logEl.scrollHeight;
+
+  // Single joined console line per record
+  logPending = logPending ? (logPending + ' ' + clean) : clean;
+}
+
+// Public log() — feed it cleaned text; it will split + join properly
+function log(line, cls='') {
+  const cleaned = cleanAnsiStream(line);
+  const pieces = splitIntoRecords(cleaned);
+  if (!pieces.length) return;
+
+  // If first piece doesn't look like a start and nothing pending, make it a start
+  if (!START_TOKEN_RX.test(pieces[0]) && !logPending) {
+    pieces[0] = pieces[0].trimStart();
+  }
+  for (const p of pieces) logSingle(p, cls);
+}
+
+// Call this wherever you finish a logging burst (e.g., after flushAscii() / on disconnect)
+function flushLog() {
+  if (logPending) {
+    console.log(logPending);
+    logPending = '';
+  }
+}
+
   function hex(n){ return '0x' + (n>>>0).toString(16).padStart(8,'0'); }
   function escapeHtml(s){return (s??'').toString().replace(/[&<>"']/g,c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]))}
 
@@ -400,90 +488,106 @@
     log('Protobufs loaded ✓', 'ok');
   }
 
-  // ---------- Serial ASCII sanitization ----------
-  const asciiDecoder = new TextDecoder('utf-8');
-  let asciiLineBuffer = '';
-  let asciiParseBuffer = '';
-  let ansiCarry = '';
+// --- Robust ANSI-safe line join + message extraction (DROP-IN) ---
+const asciiDecoder = new TextDecoder('utf-8');
+let asciiLineBuffer = '';   // UI log rendering (whole lines only)
+let asciiParseBuffer = '';  // rolling parser buffer; KEEP newlines here
+let ansiCarry = '';         // holds partial \x1b... sequences that split across chunks
 
-  function cleanAnsiStream(chunkText) {
-    let s = ansiCarry + chunkText;
-    ansiCarry = '';
-    s = s.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
-    s = s.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '');
-    s = s.replace(/\x1b[@-~]/g, '');
-    const escIdx = s.lastIndexOf('\x1b');
-    if (escIdx !== -1) {
-      const tail = s.slice(escIdx);
-      const looksStart = /^\x1b(?:\[|\]|[@-~]|$)/.test(tail);
-      const completeCSI = /^\x1b\[[0-?]*[ -/]*[@-~]/.test(tail);
-      const completeOSC = /^\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/.test(tail);
-      const single = /^\x1b[@-~]/.test(tail);
-      if (looksStart && !(completeCSI || completeOSC || single)) {
-        ansiCarry = tail;
-        s = s.slice(0, escIdx);
-      }
+// Remove full ANSI sequences; carry any partial that starts at the end of the chunk
+function cleanAnsiStream(chunkText) {
+  let s = ansiCarry + chunkText;
+  ansiCarry = '';
+
+  // Full CSI/OSC/single-char escapes
+  s = s.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+  s = s.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '');
+  s = s.replace(/\x1b[@-~]/g, '');
+
+  // If a partial escape starts at the tail, keep it for the next chunk
+  const escIdx = s.lastIndexOf('\x1b');
+  if (escIdx !== -1) {
+    const tail = s.slice(escIdx);
+    const looksStart = /^\x1b(?:\[|\]|[@-~]|$)/.test(tail);
+    const completeCSI = /^\x1b\[[0-?]*[ -/]*[@-~]/.test(tail);
+    const completeOSC = /^\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/.test(tail);
+    const single      = /^\x1b[@-~]/.test(tail);
+    if (looksStart && !(completeCSI || completeOSC || single)) {
+      ansiCarry = tail;           // hold the partial escape
+      s = s.slice(0, escIdx);     // drop it from this chunk
     }
-    return s;
   }
+  return s;
+}
 
-  function appendAscii(bytes){
-    const raw = asciiDecoder.decode(bytes, { stream: true });
-    const cleaned = cleanAnsiStream(raw).replace(/\r/g, '');
+function appendAscii(bytes){
+  // Decode stream; normalize CR but KEEP '\n' in parse buffer
+  const raw = asciiDecoder.decode(bytes, { stream: true });
+  const cleaned = cleanAnsiStream(raw).replace(/\r/g, '');
+
+  // 1) UI log pane: only emit whole lines
+  asciiLineBuffer += cleaned;
+  const parts = asciiLineBuffer.split('\n');
+  asciiLineBuffer = parts.pop(); // keep incomplete tail line
+  for (const line of parts) if (line.trim().length) log(line);
+
+  // 2) Parser buffer: preserve newlines to keep "INFO/DEBUG/..." on their own line
+  asciiParseBuffer += cleaned;
+  if (asciiParseBuffer.length > 20000) asciiParseBuffer = asciiParseBuffer.slice(-12000);
+
+  processAsciiBuffer();
+}
+
+function flushAscii(){
+  const tail = asciiDecoder.decode();
+  if (tail) {
+    const cleaned = cleanAnsiStream(tail).replace(/\r/g,'');
     asciiLineBuffer += cleaned;
-    const parts = asciiLineBuffer.split('\n');
-    asciiLineBuffer = parts.pop();
-    for (const line of parts) if (line.trim().length) log(line);
     asciiParseBuffer += cleaned;
-    if (asciiParseBuffer.length > 16000) asciiParseBuffer = asciiParseBuffer.slice(-8000);
-    processAsciiBuffer();
   }
-  function flushAscii(){
-    const tail = asciiDecoder.decode();
-    if (tail) {
-      const cleaned = cleanAnsiStream(tail).replace(/\r/g,'');
-      asciiLineBuffer += cleaned;
-      asciiParseBuffer += cleaned;
+  if (asciiLineBuffer.trim().length) log(asciiLineBuffer);
+  asciiLineBuffer = '';
+  if (asciiParseBuffer.length > 0) processAsciiBuffer();
+  flushLog();
+}
+
+// Extract: "Received text msg from=0x..., id=0x..., msg=..."
+// - Do NOT fold newlines (prevents timestamp join).
+// - Stop msg= at the NEXT line that starts with a log token, or end-of-buffer.
+function processAsciiBuffer(){
+  // Compact spaces/tabs within a line only (keep '\n')
+  const compact = asciiParseBuffer.replace(/[ \t]+/g,' ');
+
+  const rx = /Received\s+text\s+msg\s+from=0x([0-9a-fA-F]{1,8})(?:[\s\S]*?)\bid=0x([0-9a-fA-F]+)(?:[\s\S]*?)\bmsg=([^\n\r]*?)(?=\r?\n(?:INFO|DEBUG|WARN|ERROR|\[Router\]|Show standard frames|Module ')|$)/gmi;
+
+  let m;
+  let emitted = false;
+  while ((m = rx.exec(compact)) !== null) {
+    // If this match ends at the buffer tail, it may be incomplete; defer until next chunk.
+    if (rx.lastIndex === compact.length) break;
+
+    const fromHex = m[1];
+    const idHex   = m[2];
+    const text    = (m[3] || '').trim();
+
+    const srcDec = parseInt(fromHex, 16) >>> 0;
+    const dstDec = (typeof myNodeNum === 'number') ? myNodeNum : 0;
+
+    const key = makeDedupKey(srcDec, idHex, text);
+    if (!seenMsgs.has(key)) {
+      rememberMsg(key);
+      onInboundText({ srcDec, dstDec, text, idHex, via: 'ascii' });
     }
-    if (asciiLineBuffer.trim().length) log(asciiLineBuffer);
-    asciiLineBuffer = '';
-    if (asciiParseBuffer.length > 0) processAsciiBuffer();
+    emitted = true;
   }
 
-  function processAsciiBuffer(){
-    const buf = asciiParseBuffer
-      .replace(/[ \t]+/g,' ')
-      .replace(/(\S)-\n(\S)/g,'$1$2')
-      .replace(/\n+/g,' ');
-
-    const rx = /Received\s+text\s+msg\s+from=0x([0-9a-fA-F]{1,8})(?:(?!msg=).)*?\bid=0x([0-9a-fA-F]+)(?:(?!msg=).)*?\bmsg=([^]+?)\s*(?=(?:INFO|DEBUG|WARN|ERROR|\[Router\]|Show standard frames|Module '|$))/gi;
-
-    let m, cutIndex = 0;
-    const emits = [];
-
-    while ((m = rx.exec(buf)) !== null) {
-      const fromHex = m[1];
-      const idHex = m[2];
-      let text = (m[3] || '').trim();
-      const endIdx = rx.lastIndex;
-      if (endIdx === buf.length) break;
-      emits.push({ fromHex, idHex, text });
-      cutIndex = endIdx;
-    }
-
-    if (emits.length) {
-      for (const {fromHex, idHex, text} of emits) {
-        const srcDec = parseInt(fromHex, 16) >>> 0;
-        const dstDec = myNodeNum ?? 0;
-        const key = makeDedupKey(srcDec, idHex, text);
-        if (!seenMsgs.has(key)) {
-          rememberMsg(key);
-          onInboundText({ srcDec, dstDec, text, idHex, via: 'ascii' });
-        }
-      }
-      asciiParseBuffer = buf.slice(cutIndex);
-    }
+  // Trim processed prefix safely:
+  // keep a small tail so we never cut mid-ANSI or right before a log token (prevents "0m34mDEBUG").
+  if (emitted) {
+    const KEEP_TAIL = 256;
+    asciiParseBuffer = asciiParseBuffer.slice(-KEEP_TAIL);
   }
+}
 
   // ---------- Framing / Write ----------
   const encoder = new TextEncoder();
@@ -970,6 +1074,7 @@ Viewport: ${vp}`;
     } finally {
       writer = null; reader = null;
       flushAscii();
+      flushLog();
       $('#portInfo').textContent = 'Not connected';
       $('#btnSend').disabled = true;
       $('#btnRefresh').disabled = true;
