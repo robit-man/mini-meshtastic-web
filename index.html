@@ -339,7 +339,8 @@
                     <div class="chat">
                         <div id="chatHeader"
                             style="padding:8px 12px;border-bottom:1px solid #1e2546;color:var(--muted)">Select a node or
-                            <b>Public</b>…</div>
+                            <b>Public</b>…
+                        </div>
                         <div id="msgs" class="msgs"></div>
 
                         <!-- Share bar -->
@@ -392,6 +393,10 @@
             // ---- LOG WRAP + CONSOLE SPLIT (drop-in) ----
             let logPending = '';
             let lastLogDiv = null;
+            let reconnectTimer = null;
+            let reconnectBackoffMs = 1000;            // start at 1s
+            const RECONNECT_BACKOFF_MAX = 15000;      // cap at 15s
+            let userInitiatedDisconnect = false;      // don't auto-reconnect if user clicked Disconnect
 
             function cleanAnsiStream(chunkText) {
                 let s = ansiCarry + chunkText;
@@ -486,6 +491,39 @@
 
             function hex(n) { return '0x' + (n >>> 0).toString(16).padStart(8, '0'); }
             function escapeHtml(s) { return (s ?? '').toString().replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])) }
+
+            function cancelReconnectTimer() {
+                if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+            }
+
+            function scheduleReconnect(reason = '') {
+                if (userInitiatedDisconnect) return;          // respect manual disconnect
+                if (reconnectTimer) return;                   // already scheduled
+                $('#portInfo').textContent = 'Reconnecting…';
+                log(`Scheduling reconnect ${reason ? `(${reason})` : ''} in ${reconnectBackoffMs}ms`, 'warn');
+
+                reconnectTimer = setTimeout(async () => {
+                    reconnectTimer = null;
+                    const ok = await tryAutoConnect();          // you already have this function
+                    if (ok) {
+                        reconnectBackoffMs = 1000;                // reset backoff on success
+                    } else {
+                        reconnectBackoffMs = Math.min(RECONNECT_BACKOFF_MAX, Math.floor(reconnectBackoffMs * 1.7));
+                        scheduleReconnect('retry');               // keep trying
+                    }
+                }, reconnectBackoffMs);
+            }
+
+            // Clean up handles after an unexpected loss so we can reopen cleanly
+            async function handleConnectionLost(reason = '') {
+                log(`Connection lost: ${reason}`, 'warn');
+                try { readLoopAbortController?.abort(); } catch { }
+                try { reader?.releaseLock(); } catch { }
+                try { writer?.releaseLock(); } catch { }
+                try { await port?.close?.(); } catch { }       // safe to try; ignore errors
+                reader = null; writer = null;
+                scheduleReconnect(reason);
+            }
 
             // ---------- Leaflet map ----------
             let map, markers = new Map();
@@ -913,10 +951,15 @@
                         }
                     }
                 } catch (e) {
-                    if (!signal.aborted) log('Read loop error: ' + e.message, 'err');
+                    if (!signal?.aborted) { await handleConnectionLost('read loop'); }
+
                 } finally {
                     try { reader.releaseLock(); } catch { }
                     flushAscii();
+                    if (!signal?.aborted && !userInitiatedDisconnect && !writer) {
+                        // If we got here without a writer, make sure a reconnect is scheduled
+                        scheduleReconnect('read loop finally');
+                    }
                 }
             }
 
@@ -1260,6 +1303,8 @@ Viewport: ${vp}`;
 
             // ---------- Connect / handshake ----------
             async function connect() {
+                cancelReconnectTimer();
+                userInitiatedDisconnect = false;
                 await initProtobuf();
                 if (!port) throw new Error('No port chosen');
                 if (!(port.readable || port.writable)) {
@@ -1313,6 +1358,7 @@ Viewport: ${vp}`;
             function stopHeartbeat() { if (hbTimer) { clearInterval(hbTimer); hbTimer = null; } }
 
             async function disconnect() {
+                cancelReconnectTimer();
                 stopHeartbeat();
                 stopLocationInterval();
                 try {
@@ -1378,14 +1424,21 @@ Viewport: ${vp}`;
             }
 
             if (navigator.serial && navigator.serial.addEventListener) {
+                navigator.serial.addEventListener('disconnect', async () => {
+                    log('Serial device disconnected', 'warn');
+                    await handleConnectionLost('serial disconnect');
+                });
+
                 navigator.serial.addEventListener('connect', async () => {
                     log('Serial device connected', 'ok');
-                    if (!writer) { await tryAutoConnect(); }
-                });
-                navigator.serial.addEventListener('disconnect', () => {
-                    log('Serial device disconnected', 'warn');
+                    // try immediately (don’t gate on writer; it may be stale)
+                    cancelReconnectTimer();
+                    reconnectBackoffMs = 1000;
+                    const ok = await tryAutoConnect();
+                    if (!ok) scheduleReconnect('post connect event');
                 });
             }
+
 
             // ---------- Buttons ----------
             $('#btnRequest').onclick = async () => {
@@ -1425,7 +1478,11 @@ Viewport: ${vp}`;
             $('#btnRefresh').onclick = async () => {
                 try { await requestNodeDb(); } catch (e) { log('Refresh failed: ' + e.message, 'err'); }
             };
-            $('#btnDisconnect').onclick = disconnect;
+            $('#btnDisconnect').onclick = async () => {
+                userInitiatedDisconnect = true;
+                cancelReconnectTimer();
+                await disconnect();
+            };
 
             $('#btnSend').onclick = async () => {
                 const text = $('#msgText').value.trim();
