@@ -134,19 +134,18 @@
   const $ = sel => document.querySelector(sel);
   const logEl = $('#log');
   const stripAnsiQuick = s => (s||'').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'').replace(/\x1b[@-~]/g,'');
-  // ---- Clean ANSI + robust record splitting (no unterminated regex) ----
+  // ---- Clean ANSI + robust record splitting ----
 
-// 1) Strip real ANSI, heal broken SGR like "3 4m" -> "34m", then remove stray "34m"/"0m"
 function cleanAnsiStream(chunkText) {
   let s = ansiCarry + chunkText;
   ansiCarry = '';
 
-  // CSI (ESC[...), OSC (ESC]...BEL/ESC\), and single-char ESC
+  // Remove full ANSI/OSC and single-char escapes first
   s = s.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
   s = s.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '');
   s = s.replace(/\x1b[@-~]/g, '');
 
-  // If an ESC started at the end of this chunk, carry it forward
+  // If an escape begun at end, carry it to next chunk
   const escIdx = s.lastIndexOf('\x1b');
   if (escIdx !== -1) {
     const tail = s.slice(escIdx);
@@ -160,41 +159,41 @@ function cleanAnsiStream(chunkText) {
     }
   }
 
-  // Heal common broken SGR numbers: "3 4m" -> "34m", "3 2m" -> "32m", "1 00m" -> "100m"
-  // Run twice to catch nested splits.
+  // Heal split SGR numbers: "3 4m" -> "34m" (run twice for nested splits)
   s = s.replace(/\b(\d{1,3})\s+(\d{1,3})m\b/g, '$1$2m')
        .replace(/\b(\d{1,3})\s+(\d{1,3})m\b/g, '$1$2m');
 
-  // Remove any remaining stray SGR tokens like "0m", "34m", possibly repeated
-  s = s.replace(/(?:\b\d{1,3}m\b\s*)+/g, '');
+  // Strip any remaining orphaned SGR tokens like "0m", "34m" EVEN when glued to text/digits (e.g., "34m0")
+  // Keep preceding char (group 1) and drop the SGR piece.
+  s = s.replace(/(^|[^\dA-Za-z])(\d{1,3})m/g, '$1');
 
   // Normalize CRs
   return s.replace(/\r/g, '');
 }
 
-// 2) A record starts ONLY at level tokens (avoid splitting in "[GPS]" mid-line)
-const START_TOKEN_RX = /^\s*(?:\d{1,3}\s*m\s*)*(?:INFO|DEBUG|WARN|ERROR)\s*\|/;
-const RECORD_SPLIT_RX = /(?=\s*(?:\d{1,3}\s*m\s*)*(?:INFO|DEBUG|WARN|ERROR)\s*\|)/g;
+// Define what a record start looks like: optional junk then LEVEL |
+const START_TOKEN_RX   = /^\s*(?:\d{1,3}\s*m\s*)*(?:INFO|DEBUG|WARN|ERROR)\s*\|/;
+const RECORD_SPLIT_RX  = /(?=\s*(?:\d{1,3}\s*m\s*)*(?:INFO|DEBUG|WARN|ERROR)\s*\|)/g;
 
-let logPending = '';     // current console-joined record
-let lastLogDiv = null;   // last <div> in the UI log we append to
+let logPending = '';   // one logical console line per record
+let lastLogDiv = null; // last <div> in UI log
 
 function splitIntoRecords(clean) {
-  // One chunk can contain multiple records back-to-back with no newline
+  // A chunk can hold multiple records without newlines; split at real starts
   return clean.split(RECORD_SPLIT_RX).filter(Boolean);
 }
 
 function logSingle(clean, cls='') {
   const startsRecord = START_TOKEN_RX.test(clean) || cls === 'ok' || cls === 'warn' || cls === 'err';
 
-  // New record? flush console line
+  // New record → flush prior joined console line
   if (startsRecord && logPending) {
     console.log(logPending);
     logPending = '';
     lastLogDiv = null;
   }
 
-  // UI: new div for new record, else append to the same div (prevents mid-line splits)
+  // UI log: append to same div until next record start
   if (!lastLogDiv || startsRecord) {
     lastLogDiv = document.createElement('div');
     if (cls) lastLogDiv.classList.add(cls);
@@ -205,24 +204,24 @@ function logSingle(clean, cls='') {
   }
   logEl.scrollTop = logEl.scrollHeight;
 
-  // Single joined console line per record
+  // Keep console joined
   logPending = logPending ? (logPending + ' ' + clean) : clean;
 }
 
-// Public log() — feed it cleaned text; it will split + join properly
+// Public logger: feed raw/cleaned text here
 function log(line, cls='') {
   const cleaned = cleanAnsiStream(line);
-  const pieces = splitIntoRecords(cleaned);
-  if (!pieces.length) return;
+  const parts = splitIntoRecords(cleaned);
+  if (!parts.length) return;
 
-  // If first piece doesn't look like a start and nothing pending, make it a start
-  if (!START_TOKEN_RX.test(pieces[0]) && !logPending) {
-    pieces[0] = pieces[0].trimStart();
+  // If first part doesn't look like a start and no pending, accept as beginning
+  if (!START_TOKEN_RX.test(parts[0]) && !logPending) {
+    parts[0] = parts[0].trimStart();
   }
-  for (const p of pieces) logSingle(p, cls);
+  for (const p of parts) logSingle(p, cls);
 }
 
-// Call this wherever you finish a logging burst (e.g., after flushAscii() / on disconnect)
+// Call this after flushAscii()/on disconnect to end the open console line cleanly
 function flushLog() {
   if (logPending) {
     console.log(logPending);
