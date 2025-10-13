@@ -1,365 +1,618 @@
 <!doctype html>
 <html lang="en">
+
 <head>
-  <meta charset="utf-8" />
-  <title>Meshtastic WebSerial (Minimal)</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <!-- Leaflet (no SRI so it won't get blocked by mismatched hashes) -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <!-- protobuf.js runtime -->
-  <script defer src="https://cdn.jsdelivr.net/npm/protobufjs@7.2.6/dist/protobuf.min.js"></script>
-  <!-- pako for compressed text (port 7) -->
-  <script defer src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
-  <style>
-    :root { --bg:#0f1220; --panel:#151a2d; --soft:#1b2240; --text:#e7e8ee; --muted:#9aa3b2; --accent:#5ee3a6; --sel:#242b52; --red:#ef4444; }
-    *{box-sizing:border-box}
-    html, body { height:100%; overflow:hidden; }
-    body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,Segoe UI,Roboto,Inter,Arial}
-    header{display:flex;gap:8px;align-items:center;padding:10px 12px;background:var(--panel);position:sticky;top:0;z-index:5;border-bottom:1px solid #1e2546}
-    button,select,input[type="text"],input[type="number"]{background:#222a4a;color:var(--text);border:1px solid #2e386b;border-radius:8px;padding:8px 10px}
-    button:hover{background:#27305b} button:disabled{opacity:.5;cursor:not-allowed}
-    .main{display:grid;grid-template-columns:320px 1fr;height:calc(100vh - 54px)}
-    .sidebar{border-right:1px solid #1e2546;display:flex;flex-direction:column;min-width:280px;min-height:0}
-    .side-top{padding:10px;border-bottom:1px solid #1e2546}
-    .nodes{overflow:auto;flex:1;min-height:0}
-    .node{padding:10px;border-bottom:1px solid #1e2546;cursor:pointer;position:relative}
-    .node:hover{background:#1a2040}
-    .node.selected{background:var(--sel)}
-    .node .name{font-weight:600}
-    .metrics{font-size:12px;color:var(--muted);display:flex;gap:8px;flex-wrap:wrap}
-    .content{display:flex;flex-direction:column;min-height:0}
-    .tabs{display:flex;gap:6px;padding:8px;border-bottom:1px solid #1e2546}
-    .tab{padding:8px 10px;border-radius:8px;cursor:pointer;background:#1a2040;color:var(--muted);position:relative}
-    .tab.active{background:var(--soft);color:var(--text)}
-    .views{position:relative;flex:1;min-height:0}
-    .view{position:absolute;inset:0;display:none}
-    .view.active{display:flex}
-    #map{height:100%;width:100%}
-    .chat{flex:1;display:flex;flex-direction:column;min-height:0}
-    .msgs{flex:1;overflow:auto;padding:12px}
-    .msg{max-width:70%;padding:8px 10px;border-radius:10px;margin:6px 0;white-space:pre-wrap}
-    .me{background:#2c365f;margin-left:auto}
-    .them{background:#1c2347}
-    .sharebar{display:flex;gap:8px;align-items:center;padding:8px 10px;border-top:1px solid #1e2546;border-bottom:1px solid #1e2546;background:#121737;flex-wrap:wrap}
-    .sharebar .group{display:flex;gap:6px;align-items:center}
-    .sharebar label{font-size:12px;color:var(--muted)}
-    .composer{display:flex;gap:8px;padding:10px;border-top:1px solid #1e2546;background:var(--panel)}
-    .composer input[type="text"]{flex:1}
-    .log{font-family:ui-monospace,Consolas,monospace;font-size:12px;padding:10px;white-space:pre-wrap;overflow:auto}
-    .status{margin-left:auto;color:var(--muted)}
-    .badge{display:inline-block;padding:2px 6px;border-radius:6px;font-size:12px;background:#20335a}
-    .ok{color:var(--accent)}
-    .warn{color:#ffd166}
-    .err{color:#ff6666}
-    .chip{display:inline-block;background:#20335a;border:1px solid #2a3b52;color:#c3d6ea;padding:2px 8px;border-radius:999px;font-size:12px;cursor:pointer;user-select:none}
-    .bubble{ position:absolute; right:10px; top:10px; background:var(--red); color:#fff; min-width:18px; height:18px; padding:0 6px; border-radius:9px; display:inline-flex; align-items:center; justify-content:center; font-weight:600; font-size:11px; }
-  </style>
+    <meta charset="utf-8" />
+    <title>Meshtastic WebSerial (Minimal)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Leaflet (no SRI so it won't get blocked by mismatched hashes) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- protobuf.js runtime -->
+    <script defer src="https://cdn.jsdelivr.net/npm/protobufjs@7.2.6/dist/protobuf.min.js"></script>
+    <!-- pako for compressed text (port 7) -->
+    <script defer src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+    <style>
+        :root {
+            --bg: #0f1220;
+            --panel: #151a2d;
+            --soft: #1b2240;
+            --text: #e7e8ee;
+            --muted: #9aa3b2;
+            --accent: #5ee3a6;
+            --sel: #242b52;
+            --red: #ef4444;
+        }
+
+        * {
+            box-sizing: border-box
+        }
+
+        html,
+        body {
+            height: 100%;
+            overflow: hidden;
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font: 14px/1.4 system-ui, Segoe UI, Roboto, Inter, Arial
+        }
+
+        header {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            padding: 10px 12px;
+            background: var(--panel);
+            position: sticky;
+            top: 0;
+            z-index: 5;
+            border-bottom: 1px solid #1e2546
+        }
+
+        button,
+        select,
+        input[type="text"],
+        input[type="number"] {
+            background: #222a4a;
+            color: var(--text);
+            border: 1px solid #2e386b;
+            border-radius: 8px;
+            padding: 8px 10px
+        }
+
+        button:hover {
+            background: #27305b
+        }
+
+        button:disabled {
+            opacity: .5;
+            cursor: not-allowed
+        }
+
+        .main {
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            height: calc(100vh - 54px)
+        }
+
+        .sidebar {
+            border-right: 1px solid #1e2546;
+            display: flex;
+            flex-direction: column;
+            min-width: 280px;
+            min-height: 0
+        }
+
+        .side-top {
+            padding: 10px;
+            border-bottom: 1px solid #1e2546
+        }
+
+        .nodes {
+            overflow: auto;
+            flex: 1;
+            min-height: 0
+        }
+
+        .node {
+            padding: 10px;
+            border-bottom: 1px solid #1e2546;
+            cursor: pointer;
+            position: relative
+        }
+
+        .node:hover {
+            background: #1a2040
+        }
+
+        .node.selected {
+            background: var(--sel)
+        }
+
+        .node .name {
+            font-weight: 600
+        }
+
+        .metrics {
+            font-size: 12px;
+            color: var(--muted);
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap
+        }
+
+        .content {
+            display: flex;
+            flex-direction: column;
+            min-height: 0
+        }
+
+        .tabs {
+            display: flex;
+            gap: 6px;
+            padding: 8px;
+            border-bottom: 1px solid #1e2546
+        }
+
+        .tab {
+            padding: 8px 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            background: #1a2040;
+            color: var(--muted);
+            position: relative
+        }
+
+        .tab.active {
+            background: var(--soft);
+            color: var(--text)
+        }
+
+        .views {
+            position: relative;
+            flex: 1;
+            min-height: 0
+        }
+
+        .view {
+            position: absolute;
+            inset: 0;
+            display: none
+        }
+
+        .view.active {
+            display: flex
+        }
+
+        #map {
+            height: 100%;
+            width: 100%
+        }
+
+        .chat {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0
+        }
+
+        .msgs {
+            flex: 1;
+            overflow: auto;
+            padding: 12px
+        }
+
+        .msg {
+            max-width: 70%;
+            padding: 8px 10px;
+            border-radius: 10px;
+            margin: 6px 0;
+            white-space: pre-wrap
+        }
+
+        .me {
+            background: #2c365f;
+            margin-left: auto
+        }
+
+        .them {
+            background: #1c2347
+        }
+
+        .sharebar {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            padding: 8px 10px;
+            border-top: 1px solid #1e2546;
+            border-bottom: 1px solid #1e2546;
+            background: #121737;
+            flex-wrap: wrap
+        }
+
+        .sharebar .group {
+            display: flex;
+            gap: 6px;
+            align-items: center
+        }
+
+        .sharebar label {
+            font-size: 12px;
+            color: var(--muted)
+        }
+
+        .composer {
+            display: flex;
+            gap: 8px;
+            padding: 10px;
+            border-top: 1px solid #1e2546;
+            background: var(--panel)
+        }
+
+        .composer input[type="text"] {
+            flex: 1
+        }
+
+        .log {
+            font-family: ui-monospace, Consolas, monospace;
+            font-size: 12px;
+            padding: 10px;
+            white-space: pre-wrap;
+            overflow: auto
+        }
+
+        .status {
+            margin-left: auto;
+            color: var(--muted)
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 6px;
+            font-size: 12px;
+            background: #20335a
+        }
+
+        .ok {
+            color: var(--accent)
+        }
+
+        .warn {
+            color: #ffd166
+        }
+
+        .err {
+            color: #ff6666
+        }
+
+        .chip {
+            display: inline-block;
+            background: #20335a;
+            border: 1px solid #2a3b52;
+            color: #c3d6ea;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-size: 12px;
+            cursor: pointer;
+            user-select: none
+        }
+
+        .bubble {
+            position: absolute;
+            right: 10px;
+            top: 10px;
+            background: var(--red);
+            color: #fff;
+            min-width: 18px;
+            height: 18px;
+            padding: 0 6px;
+            border-radius: 9px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 11px;
+        }
+    </style>
 </head>
+
 <body>
-<header>
-  <strong>Meshtastic WebSerial (Minimal)</strong>
-  <button id="btnRequest">Choose Port…</button>
-  <button id="btnConnect" disabled>Connect @ 115200</button>
-  <button id="btnRefresh" disabled>Refresh NodeDB</button>
-  <button id="btnDisconnect" disabled>Disconnect</button>
-  <span id="portInfo" class="status">Not connected</span>
-</header>
+    <header>
+        <strong>Meshtastic WebSerial (Minimal)</strong>
+        <button id="btnRequest">Choose Port…</button>
+        <button id="btnConnect" disabled>Connect @ 115200</button>
+        <button id="btnRefresh" disabled>Refresh NodeDB</button>
+        <button id="btnDisconnect" disabled>Disconnect</button>
+        <span id="portInfo" class="status">Not connected</span>
+    </header>
 
-<div class="main">
-  <aside class="sidebar">
-    <div class="side-top">
-      <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap">
-        <div><span class="badge">Nodes</span> <span id="nodeCount">0</span></div>
-        <div style="display:flex;gap:8px">
-          <div id="publicChip" class="chip" title="Open Public thread (^all ch0)">Public</div>
-        </div>
-      </div>
-      <div id="selfInfo" class="metrics" style="margin-top:6px;color:#9aa3b2"></div>
-    </div>
-    <div id="nodes" class="nodes"></div>
-  </aside>
-
-  <section class="content">
-    <div class="tabs">
-      <div class="tab active" data-view="chatView">Chat</div>
-      <div class="tab" data-view="mapView">Map</div>
-      <div class="tab" data-view="logView">Logs</div>
-      <span id="syncState" class="status"></span>
-    </div>
-    <div class="views">
-      <div id="chatView" class="view active">
-        <div class="chat">
-          <div id="chatHeader" style="padding:8px 12px;border-bottom:1px solid #1e2546;color:var(--muted)">Select a node or <b>Public</b>…</div>
-          <div id="msgs" class="msgs"></div>
-
-          <!-- Share bar -->
-          <div class="sharebar">
-            <div class="group">
-              <button id="btnSendUA" title="Send browser information as a text message">Send Browser Info</button>
+    <div class="main">
+        <aside class="sidebar">
+            <div class="side-top">
+                <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap">
+                    <div><span class="badge">Nodes</span> <span id="nodeCount">0</span></div>
+                    <div style="display:flex;gap:8px">
+                        <div id="publicChip" class="chip" title="Open Public thread (^all ch0)">Public</div>
+                    </div>
+                </div>
+                <div id="selfInfo" class="metrics" style="margin-top:6px;color:#9aa3b2"></div>
             </div>
-            <div class="group">
-              <button id="btnLocOnce" title="Send current location once">Send Location Once</button>
-              <label>Every (s)
-                <input id="locInterval" type="number" min="5" value="60" style="width:80px">
-              </label>
-              <button id="btnLocStart">Start</button>
-              <button id="btnLocStop" disabled>Stop</button>
-            </div>
-            <div class="group" style="margin-left:auto">
-              <label>Destination
-                <select id="shareDest">
-                  <option value="current" selected>Current thread</option>
-                  <option value="public">Public</option>
-                </select>
-              </label>
-            </div>
-          </div>
+            <div id="nodes" class="nodes"></div>
+        </aside>
 
-          <div class="composer">
-            <input id="msgText" type="text" placeholder="Type message…" />
-            <button id="btnSend" disabled>Send</button>
-          </div>
-        </div>
-      </div>
-      <div id="mapView" class="view"><div id="map"></div></div>
-      <div id="logView" class="view"><div id="log" class="log"></div></div>
+        <section class="content">
+            <div class="tabs">
+                <div class="tab active" data-view="chatView">Chat</div>
+                <div class="tab" data-view="mapView">Map</div>
+                <div class="tab" data-view="logView">Logs</div>
+                <span id="syncState" class="status"></span>
+            </div>
+            <div class="views">
+                <div id="chatView" class="view active">
+                    <div class="chat">
+                        <div id="chatHeader"
+                            style="padding:8px 12px;border-bottom:1px solid #1e2546;color:var(--muted)">Select a node or
+                            <b>Public</b>…</div>
+                        <div id="msgs" class="msgs"></div>
+
+                        <!-- Share bar -->
+                        <div class="sharebar">
+                            <div class="group">
+                                <button id="btnSendUA" title="Send browser information as a text message">Send Browser
+                                    Info</button>
+                            </div>
+                            <div class="group">
+                                <button id="btnLocOnce" title="Send current location once">Send Location Once</button>
+                                <label>Every (s)
+                                    <input id="locInterval" type="number" min="5" value="60" style="width:80px">
+                                </label>
+                                <button id="btnLocStart">Start</button>
+                                <button id="btnLocStop" disabled>Stop</button>
+                            </div>
+                            <div class="group" style="margin-left:auto">
+                                <label>Destination
+                                    <select id="shareDest">
+                                        <option value="current" selected>Current thread</option>
+                                        <option value="public">Public</option>
+                                    </select>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="composer">
+                            <input id="msgText" type="text" placeholder="Type message…" />
+                            <button id="btnSend" disabled>Send</button>
+                        </div>
+                    </div>
+                </div>
+                <div id="mapView" class="view">
+                    <div id="map"></div>
+                </div>
+                <div id="logView" class="view">
+                    <div id="log" class="log"></div>
+                </div>
+            </div>
+        </section>
     </div>
-  </section>
-</div>
 
-<script>
-(() => {
-  // ---------- UI helpers ----------
-  const $ = sel => document.querySelector(sel);
-  const logEl = $('#log');
-  const stripAnsiQuick = s => (s||'').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'').replace(/\x1b[@-~]/g,'');
-  // ---- Clean ANSI + robust record splitting ----
+    <script>
+        (() => {
+            // ---------- UI helpers ----------
+            const $ = sel => document.querySelector(sel);
+            const logEl = $('#log');
+            const stripAnsiQuick = s => (s || '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\x1b[@-~]/g, '');
+            const LOG_START_RX = /^(?:INFO|DEBUG|WARN|ERROR)\s*\||^\[[A-Za-z]/; // starts a new record
+            // ---- LOG WRAP + CONSOLE SPLIT (drop-in) ----
+            let logPending = '';
+            let lastLogDiv = null;
 
-function cleanAnsiStream(chunkText) {
-  let s = ansiCarry + chunkText;
-  ansiCarry = '';
+            function cleanAnsiStream(chunkText) {
+                let s = ansiCarry + chunkText;
+                ansiCarry = '';
 
-  // Remove full ANSI/OSC and single-char escapes first
-  s = s.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
-  s = s.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '');
-  s = s.replace(/\x1b[@-~]/g, '');
+                // Strip full ANSI/OSC/single-char
+                s = s.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+                    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+                    .replace(/\x1b[@-~]/g, '');
 
-  // If an escape begun at end, carry it to next chunk
-  const escIdx = s.lastIndexOf('\x1b');
-  if (escIdx !== -1) {
-    const tail = s.slice(escIdx);
-    const looksStart = /^\x1b(?:\[|\]|[@-~]|$)/.test(tail);
-    const completeCSI = /^\x1b\[[0-?]*[ -/]*[@-~]/.test(tail);
-    const completeOSC = /^\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/.test(tail);
-    const single = /^\x1b[@-~]/.test(tail);
-    if (looksStart && !(completeCSI || completeOSC || single)) {
-      ansiCarry = tail;
-      s = s.slice(0, escIdx);
-    }
-  }
+                // Carry partial ESC if it starts but doesn't finish in this chunk
+                const esc = s.lastIndexOf('\x1b');
+                if (esc !== -1) {
+                    const tail = s.slice(esc);
+                    const looksStart = /^\x1b(?:\[|\]|[@-~]|$)/.test(tail);
+                    const completeCSI = /^\x1b\[[0-?]*[ -/]*[@-~]/.test(tail);
+                    const completeOSC = /^\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/.test(tail);
+                    const single = /^\x1b[@-~]/.test(tail);
+                    if (looksStart && !(completeCSI || completeOSC || single)) {
+                        ansiCarry = tail;
+                        s = s.slice(0, esc);
+                    }
+                }
 
-  // Heal split SGR numbers: "3 4m" -> "34m" (run twice for nested splits)
-  s = s.replace(/\b(\d{1,3})\s+(\d{1,3})m\b/g, '$1$2m')
-       .replace(/\b(\d{1,3})\s+(\d{1,3})m\b/g, '$1$2m');
+                // Heal split SGR: "3 4m" -> "34m" (do twice to catch nested)
+                s = s.replace(/\b(\d{1,3})\s+(\d{1,3})m\b/g, '$1$2m')
+                    .replace(/\b(\d{1,3})\s+(\d{1,3})m\b/g, '$1$2m');
 
-  // Strip any remaining orphaned SGR tokens like "0m", "34m" EVEN when glued to text/digits (e.g., "34m0")
-  // Keep preceding char (group 1) and drop the SGR piece.
-  s = s.replace(/(^|[^\dA-Za-z])(\d{1,3})m/g, '$1');
+                // Remove orphaned SGR like "0m"/"34m" (even if glued to text/digits)
+                s = s.replace(/(^|[^\w])\d{1,3}m(?=\w)/g, '$1')   // glued: "34mDEBUG" -> "DEBUG"
+                    .replace(/(^|[^\w])\d{1,3}m(?!\S)/g, '$1');  // trailing token: "34m " -> " "
 
-  // Normalize CRs
-  return s.replace(/\r/g, '');
-}
+                return s.replace(/\r/g, '');
+            }
 
-// Define what a record start looks like: optional junk then LEVEL |
-const START_TOKEN_RX   = /^\s*(?:\d{1,3}\s*m\s*)*(?:INFO|DEBUG|WARN|ERROR)\s*\|/;
-const RECORD_SPLIT_RX  = /(?=\s*(?:\d{1,3}\s*m\s*)*(?:INFO|DEBUG|WARN|ERROR)\s*\|)/g;
+            // Record anchor: LEVEL | HH:MM:SS <counter>
+            const RECORD_ANCHOR = /(?:INFO|DEBUG|WARN|ERROR)\s*\|\s*\d{1,2}:\d{2}:\d{2}\s+\d+\b/;
+            const START_TOKEN_RX = new RegExp('^\\s*(?:\\d{1,3}\\s*m\\s*)*' + RECORD_ANCHOR.source);
+            const RECORD_SPLIT_RX = new RegExp('(?=\\s*(?:\\d{1,3}\\s*m\\s*)*' + RECORD_ANCHOR.source + ')', 'g');
 
-let logPending = '';   // one logical console line per record
-let lastLogDiv = null; // last <div> in UI log
+            function splitIntoRecords(clean) {
+                // Split wherever a real record anchor begins (handles “… re DEBUG | …” cases)
+                return clean.split(RECORD_SPLIT_RX).filter(Boolean);
+            }
 
-function splitIntoRecords(clean) {
-  // A chunk can hold multiple records without newlines; split at real starts
-  return clean.split(RECORD_SPLIT_RX).filter(Boolean);
-}
+            function logSingle(clean, cls = '') {
+                const isStart = START_TOKEN_RX.test(clean) || cls === 'ok' || cls === 'warn' || cls === 'err';
 
-function logSingle(clean, cls='') {
-  const startsRecord = START_TOKEN_RX.test(clean) || cls === 'ok' || cls === 'warn' || cls === 'err';
+                // Console: end previous record when a new one starts
+                if (isStart && logPending) {
+                    console.log(logPending);
+                    logPending = '';
+                }
 
-  // New record → flush prior joined console line
-  if (startsRecord && logPending) {
-    console.log(logPending);
-    logPending = '';
-    lastLogDiv = null;
-  }
+                // UI: one <div> per record; keep appending until next start
+                if (!lastLogDiv || isStart) {
+                    lastLogDiv = document.createElement('div');
+                    if (cls) lastLogDiv.classList.add(cls);
+                    lastLogDiv.textContent = clean;
+                    logEl.appendChild(lastLogDiv);
+                } else {
+                    lastLogDiv.textContent += ' ' + clean;
+                }
+                logEl.scrollTop = logEl.scrollHeight;
 
-  // UI log: append to same div until next record start
-  if (!lastLogDiv || startsRecord) {
-    lastLogDiv = document.createElement('div');
-    if (cls) lastLogDiv.classList.add(cls);
-    lastLogDiv.textContent = clean;
-    logEl.appendChild(lastLogDiv);
-  } else {
-    lastLogDiv.textContent += ' ' + clean;
-  }
-  logEl.scrollTop = logEl.scrollHeight;
+                // Keep a single console line per record
+                logPending = logPending ? (logPending + ' ' + clean) : clean;
+            }
 
-  // Keep console joined
-  logPending = logPending ? (logPending + ' ' + clean) : clean;
-}
+            function log(line, cls = '') {
+                const cleaned = cleanAnsiStream(line);
+                if (!cleaned) return;
 
-// Public logger: feed raw/cleaned text here
-function log(line, cls='') {
-  const cleaned = cleanAnsiStream(line);
-  const parts = splitIntoRecords(cleaned);
-  if (!parts.length) return;
+                const parts = splitIntoRecords(cleaned);
+                if (!parts.length) return;
 
-  // If first part doesn't look like a start and no pending, accept as beginning
-  if (!START_TOKEN_RX.test(parts[0]) && !logPending) {
-    parts[0] = parts[0].trimStart();
-  }
-  for (const p of parts) logSingle(p, cls);
-}
+                // If first chunk isn’t a start and nothing is pending, treat it as the beginning
+                if (!START_TOKEN_RX.test(parts[0]) && !logPending) {
+                    parts[0] = parts[0].trimStart();
+                }
+                for (const p of parts) logSingle(p, cls);
+            }
 
-// Call this after flushAscii()/on disconnect to end the open console line cleanly
-function flushLog() {
-  if (logPending) {
-    console.log(logPending);
-    logPending = '';
-  }
-}
+            // Call this after flushAscii() and in disconnect() finally
+            function flushLog() {
+                if (logPending) {
+                    console.log(logPending);
+                    logPending = '';
+                }
+                ansiCarry = '';
+            }
 
-  function hex(n){ return '0x' + (n>>>0).toString(16).padStart(8,'0'); }
-  function escapeHtml(s){return (s??'').toString().replace(/[&<>"']/g,c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]))}
+            function hex(n) { return '0x' + (n >>> 0).toString(16).padStart(8, '0'); }
+            function escapeHtml(s) { return (s ?? '').toString().replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])) }
 
-  // ---------- Leaflet map ----------
-  let map, markers = new Map();
-  function initMap() {
-    if (map) return;
-    map = L.map('map', { zoomControl: true }).setView([0, 0], 2);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
-    }).addTo(map);
-  }
-  function getLatLonFromPos(pos) {
-    if (!pos) return null;
-    if (typeof pos.latitude_i === 'number' && typeof pos.longitude_i === 'number')
-      return [pos.latitude_i / 1e7, pos.longitude_i / 1e7];
-    if (typeof pos.latitudeI === 'number' && typeof pos.longitudeI === 'number')
-      return [pos.latitudeI / 1e7, pos.longitudeI / 1e7];
-    if (typeof pos.latitude === 'number' && typeof pos.longitude === 'number')
-      return [pos.latitude, pos.longitude];
-    return null;
-  }
-  function upsertMarker(node) {
-    const ll = getLatLonFromPos(node.position);
-    if (!ll) return;
-    if (!map) initMap();
-    const [lat, lon] = ll;
-    const label = (node.user?.long_name || node.user?.short_name || node.user?.id || node.num.toString());
-    const last = node.last_heard ? new Date(node.last_heard * 1000).toLocaleString() : '—';
-    const popup = `<b>${escapeHtml(label)}</b><br/>#${node.num} (${hex(node.num)})<br/>Last heard: ${last}`;
-    if (markers.has(node.num)) {
-      const m = markers.get(node.num);
-      m.setLatLng([lat, lon]).bindPopup(popup);
-    } else {
-      const m = L.marker([lat, lon]).addTo(map).bindPopup(popup);
-      markers.set(node.num, m);
-    }
-  }
-  function fitMapToMarkers() {
-    if (!map) return;
-    const vals = Array.from(markers.values());
-    if (!vals.length) return;
-    const group = L.featureGroup(vals);
-    map.fitBounds(group.getBounds(), { padding: [24, 24] });
-  }
+            // ---------- Leaflet map ----------
+            let map, markers = new Map();
+            function initMap() {
+                if (map) return;
+                map = L.map('map', { zoomControl: true }).setView([0, 0], 2);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+                }).addTo(map);
+            }
+            function getLatLonFromPos(pos) {
+                if (!pos) return null;
+                if (typeof pos.latitude_i === 'number' && typeof pos.longitude_i === 'number')
+                    return [pos.latitude_i / 1e7, pos.longitude_i / 1e7];
+                if (typeof pos.latitudeI === 'number' && typeof pos.longitudeI === 'number')
+                    return [pos.latitudeI / 1e7, pos.longitudeI / 1e7];
+                if (typeof pos.latitude === 'number' && typeof pos.longitude === 'number')
+                    return [pos.latitude, pos.longitude];
+                return null;
+            }
+            function upsertMarker(node) {
+                const ll = getLatLonFromPos(node.position);
+                if (!ll) return;
+                if (!map) initMap();
+                const [lat, lon] = ll;
+                const label = (node.user?.long_name || node.user?.short_name || node.user?.id || node.num.toString());
+                const last = node.last_heard ? new Date(node.last_heard * 1000).toLocaleString() : '—';
+                const popup = `<b>${escapeHtml(label)}</b><br/>#${node.num} (${hex(node.num)})<br/>Last heard: ${last}`;
+                if (markers.has(node.num)) {
+                    const m = markers.get(node.num);
+                    m.setLatLng([lat, lon]).bindPopup(popup);
+                } else {
+                    const m = L.marker([lat, lon]).addTo(map).bindPopup(popup);
+                    markers.set(node.num, m);
+                }
+            }
+            function fitMapToMarkers() {
+                if (!map) return;
+                const vals = Array.from(markers.values());
+                if (!vals.length) return;
+                const group = L.featureGroup(vals);
+                map.fitBounds(group.getBounds(), { padding: [24, 24] });
+            }
 
-  // ---------- Tabs ----------
-  document.querySelectorAll('.tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-      tab.classList.add('active');
-      const v = document.getElementById(tab.dataset.view);
-      v.classList.add('active');
-      if (v.id === 'mapView') { initMap(); fitMapToMarkers(); setTimeout(() => map.invalidateSize(), 50); }
-    });
-  });
-  function activateChatTab(){ document.querySelector('.tab[data-view="chatView"]').click(); }
+            // ---------- Tabs ----------
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.addEventListener('click', () => {
+                    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+                    tab.classList.add('active');
+                    const v = document.getElementById(tab.dataset.view);
+                    v.classList.add('active');
+                    if (v.id === 'mapView') { initMap(); fitMapToMarkers(); setTimeout(() => map.invalidateSize(), 50); }
+                });
+            });
+            function activateChatTab() { document.querySelector('.tab[data-view="chatView"]').click(); }
 
-  // ---------- Simple state ----------
-  let port = null;
-  let reader = null, writer = null;
-  let readLoopAbortController = null;
-  let allowed = false;
-  let PROTO = null; let Types = {};
-  const BAUD = 115200;
+            // ---------- Simple state ----------
+            let port = null;
+            let reader = null, writer = null;
+            let readLoopAbortController = null;
+            let allowed = false;
+            let PROTO = null; let Types = {};
+            const BAUD = 115200;
 
-  const BROADCAST_NUM = 0xFFFFFFFF >>> 0;
+            const BROADCAST_NUM = 0xFFFFFFFF >>> 0;
 
-  const nodes = new Map(); // num -> NodeInfo
-  let selectedNodeNum = null; // BROADCAST_NUM => public
-  let lastWantConfigNonce = null;
-  let myNodeNum = null;
+            const nodes = new Map(); // num -> NodeInfo
+            let selectedNodeNum = null; // BROADCAST_NUM => public
+            let lastWantConfigNonce = null;
+            let myNodeNum = null;
 
-  // ---------- Storage keys ----------
-  const THREADS_KEY = 'meshtastic_threads_v9';
-  const UNREAD_KEY  = 'meshtastic_unread_v1';
-  const LAST_PORT_KEY = 'meshtastic_last_port_info';
-  const LAST_DEVICE_KEY = 'meshtastic_last_device_num';
+            // ---------- Storage keys ----------
+            const THREADS_KEY = 'meshtastic_threads_v9';
+            const UNREAD_KEY = 'meshtastic_unread_v1';
+            const LAST_PORT_KEY = 'meshtastic_last_port_info';
+            const LAST_DEVICE_KEY = 'meshtastic_last_device_num';
 
-  // ---------- Threads (localStorage) ----------
-  let threads = loadThreads();
-  let unread  = loadUnread();
-  function loadThreads(){ try { return JSON.parse(localStorage.getItem(THREADS_KEY)) || {}; } catch { return {}; } }
-  function saveThreads(){ try { localStorage.setItem(THREADS_KEY, JSON.stringify(threads)); } catch {} }
-  function loadUnread(){ try { return JSON.parse(localStorage.getItem(UNREAD_KEY)) || {}; } catch { return {}; } }
-  function saveUnread(){ try { localStorage.setItem(UNREAD_KEY, JSON.stringify(unread)); } catch {} }
-  function threadKeyFor(num){
-    const n = Number(num);
-    return (n === BROADCAST_NUM || n === 0) ? 'public' : String(n >>> 0);
-  }
-  function threadGet(num){
-    const k = threadKeyFor(num);
-    if(!threads[k]) threads[k] = [];
-    return threads[k];
-  }
-  function threadAppend(num, entry){
-    const k = threadKeyFor(num);
-    if(!threads[k]) threads[k] = [];
-    threads[k].push(entry);
-    if (threads[k].length > 500) threads[k] = threads[k].slice(-500);
-    saveThreads();
-  }
-  function getUnread(num){ return unread[threadKeyFor(num)] || 0; }
-  function incUnread(num){
-    if (isViewingThreadFor(num)) return;
-    const k = threadKeyFor(num);
-    unread[k] = (unread[k] || 0) + 1;
-    saveUnread();
-    renderNodes();
-  }
-  function clearUnread(num){
-    const k = threadKeyFor(num);
-    if (unread[k]) { unread[k] = 0; saveUnread(); renderNodes(); }
-  }
+            // ---------- Threads (localStorage) ----------
+            let threads = loadThreads();
+            let unread = loadUnread();
+            function loadThreads() { try { return JSON.parse(localStorage.getItem(THREADS_KEY)) || {}; } catch { return {}; } }
+            function saveThreads() { try { localStorage.setItem(THREADS_KEY, JSON.stringify(threads)); } catch { } }
+            function loadUnread() { try { return JSON.parse(localStorage.getItem(UNREAD_KEY)) || {}; } catch { return {}; } }
+            function saveUnread() { try { localStorage.setItem(UNREAD_KEY, JSON.stringify(unread)); } catch { } }
+            function threadKeyFor(num) {
+                const n = Number(num);
+                return (n === BROADCAST_NUM || n === 0) ? 'public' : String(n >>> 0);
+            }
+            function threadGet(num) {
+                const k = threadKeyFor(num);
+                if (!threads[k]) threads[k] = [];
+                return threads[k];
+            }
+            function threadAppend(num, entry) {
+                const k = threadKeyFor(num);
+                if (!threads[k]) threads[k] = [];
+                threads[k].push(entry);
+                if (threads[k].length > 500) threads[k] = threads[k].slice(-500);
+                saveThreads();
+            }
+            function getUnread(num) { return unread[threadKeyFor(num)] || 0; }
+            function incUnread(num) {
+                if (isViewingThreadFor(num)) return;
+                const k = threadKeyFor(num);
+                unread[k] = (unread[k] || 0) + 1;
+                saveUnread();
+                renderNodes();
+            }
+            function clearUnread(num) {
+                const k = threadKeyFor(num);
+                if (unread[k]) { unread[k] = 0; saveUnread(); renderNodes(); }
+            }
 
-  // Dedup
-  const seenMsgs = new Set();
-  function makeDedupKey(srcDec, idHex, text){
-    return `${hex(srcDec).toLowerCase()}|${String(idHex).toLowerCase()}|${text}`;
-  }
-  function rememberMsg(key){
-    seenMsgs.add(key);
-    if (seenMsgs.size > 1000) {
-      const it = seenMsgs.values();
-      for (let i=0;i<200;i++) { const n = it.next(); if (n.done) break; seenMsgs.delete(n.value); }
-    }
-  }
+            // Dedup
+            const seenMsgs = new Set();
+            function makeDedupKey(srcDec, idHex, text) {
+                return `${hex(srcDec).toLowerCase()}|${String(idHex).toLowerCase()}|${text}`;
+            }
+            function rememberMsg(key) {
+                seenMsgs.add(key);
+                if (seenMsgs.size > 1000) {
+                    const it = seenMsgs.values();
+                    for (let i = 0; i < 200; i++) { const n = it.next(); if (n.done) break; seenMsgs.delete(n.value); }
+                }
+            }
 
-  // ---------- Build just-enough .proto schema (DO NOT OMIT) ----------
-  const protoSrc = `
+            // ---------- Build just-enough .proto schema (DO NOT OMIT) ----------
+            const protoSrc = `
     syntax = "proto3";
     package meshtastic;
 
@@ -470,747 +723,748 @@ function flushLog() {
     message Text { string text = 1; }
   `;
 
-  // ---------- Protobuf bootstrap ----------
-  async function initProtobuf() {
-    if (PROTO) return;
-    const parsed = protobuf.parse(protoSrc, { keepCase: true });
-    PROTO = parsed.root;
-    Types.ToRadio = PROTO.lookupType('meshtastic.ToRadio');
-    Types.FromRadio = PROTO.lookupType('meshtastic.FromRadio');
-    Types.MeshPacket = PROTO.lookupType('meshtastic.MeshPacket');
-    Types.Data = PROTO.lookupType('meshtastic.Data');
-    Types.NodeInfo = PROTO.lookupType('meshtastic.NodeInfo');
-    Types.MyNodeInfo = PROTO.lookupType('meshtastic.MyNodeInfo');
-    Types.Position = PROTO.lookupType('meshtastic.Position');
-    Types.DeviceMetrics = PROTO.lookupType('meshtastic.DeviceMetrics');
-    Types.Text = PROTO.lookupType('meshtastic.Text');
-    log('Protobufs loaded ✓', 'ok');
-  }
+            // ---------- Protobuf bootstrap ----------
+            async function initProtobuf() {
+                if (PROTO) return;
+                const parsed = protobuf.parse(protoSrc, { keepCase: true });
+                PROTO = parsed.root;
+                Types.ToRadio = PROTO.lookupType('meshtastic.ToRadio');
+                Types.FromRadio = PROTO.lookupType('meshtastic.FromRadio');
+                Types.MeshPacket = PROTO.lookupType('meshtastic.MeshPacket');
+                Types.Data = PROTO.lookupType('meshtastic.Data');
+                Types.NodeInfo = PROTO.lookupType('meshtastic.NodeInfo');
+                Types.MyNodeInfo = PROTO.lookupType('meshtastic.MyNodeInfo');
+                Types.Position = PROTO.lookupType('meshtastic.Position');
+                Types.DeviceMetrics = PROTO.lookupType('meshtastic.DeviceMetrics');
+                Types.Text = PROTO.lookupType('meshtastic.Text');
+                log('Protobufs loaded ✓', 'ok');
+            }
 
-// --- Robust ANSI-safe line join + message extraction (DROP-IN) ---
-const asciiDecoder = new TextDecoder('utf-8');
-let asciiLineBuffer = '';   // UI log rendering (whole lines only)
-let asciiParseBuffer = '';  // rolling parser buffer; KEEP newlines here
-let ansiCarry = '';         // holds partial \x1b... sequences that split across chunks
+            // --- Robust ANSI-safe line join + message extraction (DROP-IN) ---
+            const asciiDecoder = new TextDecoder('utf-8');
+            let asciiLineBuffer = '';   // UI log rendering (whole lines only)
+            let asciiParseBuffer = '';  // rolling parser buffer; KEEP newlines here
+            let ansiCarry = '';         // holds partial \x1b... sequences that split across chunks
 
-// Remove full ANSI sequences; carry any partial that starts at the end of the chunk
-function cleanAnsiStream(chunkText) {
-  let s = ansiCarry + chunkText;
-  ansiCarry = '';
+            // Remove full ANSI sequences; carry any partial that starts at the end of the chunk
+            function cleanAnsiStream(chunkText) {
+                let s = ansiCarry + chunkText;
+                ansiCarry = '';
 
-  // Full CSI/OSC/single-char escapes
-  s = s.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
-  s = s.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '');
-  s = s.replace(/\x1b[@-~]/g, '');
+                // Full CSI/OSC/single-char escapes
+                s = s.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+                s = s.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '');
+                s = s.replace(/\x1b[@-~]/g, '');
 
-  // If a partial escape starts at the tail, keep it for the next chunk
-  const escIdx = s.lastIndexOf('\x1b');
-  if (escIdx !== -1) {
-    const tail = s.slice(escIdx);
-    const looksStart = /^\x1b(?:\[|\]|[@-~]|$)/.test(tail);
-    const completeCSI = /^\x1b\[[0-?]*[ -/]*[@-~]/.test(tail);
-    const completeOSC = /^\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/.test(tail);
-    const single      = /^\x1b[@-~]/.test(tail);
-    if (looksStart && !(completeCSI || completeOSC || single)) {
-      ansiCarry = tail;           // hold the partial escape
-      s = s.slice(0, escIdx);     // drop it from this chunk
-    }
-  }
-  return s;
-}
+                // If a partial escape starts at the tail, keep it for the next chunk
+                const escIdx = s.lastIndexOf('\x1b');
+                if (escIdx !== -1) {
+                    const tail = s.slice(escIdx);
+                    const looksStart = /^\x1b(?:\[|\]|[@-~]|$)/.test(tail);
+                    const completeCSI = /^\x1b\[[0-?]*[ -/]*[@-~]/.test(tail);
+                    const completeOSC = /^\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/.test(tail);
+                    const single = /^\x1b[@-~]/.test(tail);
+                    if (looksStart && !(completeCSI || completeOSC || single)) {
+                        ansiCarry = tail;           // hold the partial escape
+                        s = s.slice(0, escIdx);     // drop it from this chunk
+                    }
+                }
+                return s;
+            }
 
-function appendAscii(bytes){
-  // Decode stream; normalize CR but KEEP '\n' in parse buffer
-  const raw = asciiDecoder.decode(bytes, { stream: true });
-  const cleaned = cleanAnsiStream(raw).replace(/\r/g, '');
+            function appendAscii(bytes) {
+                // Decode stream; normalize CR but KEEP '\n' in parse buffer
+                const raw = asciiDecoder.decode(bytes, { stream: true });
+                const cleaned = cleanAnsiStream(raw).replace(/\r/g, '');
 
-  // 1) UI log pane: only emit whole lines
-  asciiLineBuffer += cleaned;
-  const parts = asciiLineBuffer.split('\n');
-  asciiLineBuffer = parts.pop(); // keep incomplete tail line
-  for (const line of parts) if (line.trim().length) log(line);
+                // 1) UI log pane: only emit whole lines
+                asciiLineBuffer += cleaned;
+                const parts = asciiLineBuffer.split('\n');
+                asciiLineBuffer = parts.pop(); // keep incomplete tail line
+                for (const line of parts) if (line.trim().length) log(line);
 
-  // 2) Parser buffer: preserve newlines to keep "INFO/DEBUG/..." on their own line
-  asciiParseBuffer += cleaned;
-  if (asciiParseBuffer.length > 20000) asciiParseBuffer = asciiParseBuffer.slice(-12000);
+                // 2) Parser buffer: preserve newlines to keep "INFO/DEBUG/..." on their own line
+                asciiParseBuffer += cleaned;
+                if (asciiParseBuffer.length > 20000) asciiParseBuffer = asciiParseBuffer.slice(-12000);
 
-  processAsciiBuffer();
-}
+                processAsciiBuffer();
+            }
 
-function flushAscii(){
-  const tail = asciiDecoder.decode();
-  if (tail) {
-    const cleaned = cleanAnsiStream(tail).replace(/\r/g,'');
-    asciiLineBuffer += cleaned;
-    asciiParseBuffer += cleaned;
-  }
-  if (asciiLineBuffer.trim().length) log(asciiLineBuffer);
-  asciiLineBuffer = '';
-  if (asciiParseBuffer.length > 0) processAsciiBuffer();
-  flushLog();
-}
+            function flushAscii() {
+                const tail = asciiDecoder.decode();
+                if (tail) {
+                    const cleaned = cleanAnsiStream(tail).replace(/\r/g, '');
+                    asciiLineBuffer += cleaned;
+                    asciiParseBuffer += cleaned;
+                }
+                if (asciiLineBuffer.trim().length) log(asciiLineBuffer);
+                asciiLineBuffer = '';
+                if (asciiParseBuffer.length > 0) processAsciiBuffer();
+                flushLog();
+            }
 
-// Extract: "Received text msg from=0x..., id=0x..., msg=..."
-// - Do NOT fold newlines (prevents timestamp join).
-// - Stop msg= at the NEXT line that starts with a log token, or end-of-buffer.
-function processAsciiBuffer(){
-  // Compact spaces/tabs within a line only (keep '\n')
-  const compact = asciiParseBuffer.replace(/[ \t]+/g,' ');
+            // Extract: "Received text msg from=0x..., id=0x..., msg=..."
+            // - Do NOT fold newlines (prevents timestamp join).
+            // - Stop msg= at the NEXT line that starts with a log token, or end-of-buffer.
+            function processAsciiBuffer() {
+                // Compact spaces/tabs within a line only (keep '\n')
+                const compact = asciiParseBuffer.replace(/[ \t]+/g, ' ');
 
-  const rx = /Received\s+text\s+msg\s+from=0x([0-9a-fA-F]{1,8})(?:[\s\S]*?)\bid=0x([0-9a-fA-F]+)(?:[\s\S]*?)\bmsg=([^\n\r]*?)(?=\r?\n(?:INFO|DEBUG|WARN|ERROR|\[Router\]|Show standard frames|Module ')|$)/gmi;
+                const rx = /Received\s+text\s+msg\s+from=0x([0-9a-fA-F]{1,8})(?:[\s\S]*?)\bid=0x([0-9a-fA-F]+)(?:[\s\S]*?)\bmsg=([^\n\r]*?)(?=\r?\n(?:INFO|DEBUG|WARN|ERROR|\[Router\]|Show standard frames|Module ')|$)/gmi;
 
-  let m;
-  let emitted = false;
-  while ((m = rx.exec(compact)) !== null) {
-    // If this match ends at the buffer tail, it may be incomplete; defer until next chunk.
-    if (rx.lastIndex === compact.length) break;
+                let m;
+                let emitted = false;
+                while ((m = rx.exec(compact)) !== null) {
+                    // If this match ends at the buffer tail, it may be incomplete; defer until next chunk.
+                    if (rx.lastIndex === compact.length) break;
 
-    const fromHex = m[1];
-    const idHex   = m[2];
-    const text    = (m[3] || '').trim();
+                    const fromHex = m[1];
+                    const idHex = m[2];
+                    const text = (m[3] || '').trim();
 
-    const srcDec = parseInt(fromHex, 16) >>> 0;
-    const dstDec = (typeof myNodeNum === 'number') ? myNodeNum : 0;
+                    const srcDec = parseInt(fromHex, 16) >>> 0;
+                    const dstDec = (typeof myNodeNum === 'number') ? myNodeNum : 0;
 
-    const key = makeDedupKey(srcDec, idHex, text);
-    if (!seenMsgs.has(key)) {
-      rememberMsg(key);
-      onInboundText({ srcDec, dstDec, text, idHex, via: 'ascii' });
-    }
-    emitted = true;
-  }
+                    const key = makeDedupKey(srcDec, idHex, text);
+                    if (!seenMsgs.has(key)) {
+                        rememberMsg(key);
+                        onInboundText({ srcDec, dstDec, text, idHex, via: 'ascii' });
+                    }
+                    emitted = true;
+                }
 
-  // Trim processed prefix safely:
-  // keep a small tail so we never cut mid-ANSI or right before a log token (prevents "0m34mDEBUG").
-  if (emitted) {
-    const KEEP_TAIL = 256;
-    asciiParseBuffer = asciiParseBuffer.slice(-KEEP_TAIL);
-  }
-}
+                // Trim processed prefix safely:
+                // keep a small tail so we never cut mid-ANSI or right before a log token (prevents "0m34mDEBUG").
+                if (emitted) {
+                    const KEEP_TAIL = 256;
+                    asciiParseBuffer = asciiParseBuffer.slice(-KEEP_TAIL);
+                }
+            }
 
-  // ---------- Framing / Write ----------
-  const encoder = new TextEncoder();
-  function makeHeader(len) {
-    const header = new Uint8Array(4);
-    header[0] = 0x94; header[1] = 0xC3;
-    header[2] = (len >>> 8) & 0xff;
-    header[3] = (len) & 0xff;
-    return header;
-  }
-  async function writeToRadio(obj) {
-    const payload = Types.ToRadio.encode(Types.ToRadio.create(obj)).finish();
-    const header = makeHeader(payload.length);
-    const buf = new Uint8Array(header.length + payload.length);
-    buf.set(header, 0); buf.set(payload, header.length);
-    await writer.write(buf);
-  }
+            // ---------- Framing / Write ----------
+            const encoder = new TextEncoder();
+            function makeHeader(len) {
+                const header = new Uint8Array(4);
+                header[0] = 0x94; header[1] = 0xC3;
+                header[2] = (len >>> 8) & 0xff;
+                header[3] = (len) & 0xff;
+                return header;
+            }
+            async function writeToRadio(obj) {
+                const payload = Types.ToRadio.encode(Types.ToRadio.create(obj)).finish();
+                const header = makeHeader(payload.length);
+                const buf = new Uint8Array(header.length + payload.length);
+                buf.set(header, 0); buf.set(payload, header.length);
+                await writer.write(buf);
+            }
 
-  // ---------- Reading loop & framing ----------
-  async function startReadLoop() {
-    readLoopAbortController = new AbortController();
-    const signal = readLoopAbortController.signal;
-    const stream = port.readable;
-    reader = stream.getReader();
-    let acc = new Uint8Array(0);
+            // ---------- Reading loop & framing ----------
+            async function startReadLoop() {
+                readLoopAbortController = new AbortController();
+                const signal = readLoopAbortController.signal;
+                const stream = port.readable;
+                reader = stream.getReader();
+                let acc = new Uint8Array(0);
 
-    const HEADER0 = 0x94, HEADER1 = 0xC3;
-    const MAX_LEN = 4096;
+                const HEADER0 = 0x94, HEADER1 = 0xC3;
+                const MAX_LEN = 4096;
 
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        if (!value) continue;
+                try {
+                    while (true) {
+                        const { value, done } = await reader.read();
+                        if (done) break;
+                        if (!value) continue;
 
-        const tmp = new Uint8Array(acc.length + value.length);
-        tmp.set(acc, 0); tmp.set(value, acc.length);
-        acc = tmp;
+                        const tmp = new Uint8Array(acc.length + value.length);
+                        tmp.set(acc, 0); tmp.set(value, acc.length);
+                        acc = tmp;
 
-        parse: while (acc.length >= 2) {
-          let i = 0;
-          while (i + 1 < acc.length && !(acc[i] === HEADER0 && acc[i+1] === HEADER1)) i++;
+                        parse: while (acc.length >= 2) {
+                            let i = 0;
+                            while (i + 1 < acc.length && !(acc[i] === HEADER0 && acc[i + 1] === HEADER1)) i++;
 
-          if (i + 3 >= acc.length) {
-            if (i > 0) { appendAscii(acc.subarray(0, i)); acc = acc.subarray(i); }
-            break parse;
-          }
-          if (i > 0) { appendAscii(acc.subarray(0, i)); acc = acc.subarray(i); }
+                            if (i + 3 >= acc.length) {
+                                if (i > 0) { appendAscii(acc.subarray(0, i)); acc = acc.subarray(i); }
+                                break parse;
+                            }
+                            if (i > 0) { appendAscii(acc.subarray(0, i)); acc = acc.subarray(i); }
 
-          if (acc.length < 4) break parse;
-          const len = (acc[2] << 8) | acc[3];
+                            if (acc.length < 4) break parse;
+                            const len = (acc[2] << 8) | acc[3];
 
-          if (len <= 0 || len > MAX_LEN) {
-            appendAscii(acc.subarray(0, 2));
-            acc = acc.subarray(2);
-            continue;
-          }
-          if (acc.length < 4 + len) break parse;
+                            if (len <= 0 || len > MAX_LEN) {
+                                appendAscii(acc.subarray(0, 2));
+                                acc = acc.subarray(2);
+                                continue;
+                            }
+                            if (acc.length < 4 + len) break parse;
 
-          const pb = acc.subarray(4, 4 + len);
-          acc = acc.subarray(4 + len);
+                            const pb = acc.subarray(4, 4 + len);
+                            acc = acc.subarray(4 + len);
 
-          try {
-            const msg = Types.FromRadio.decode(pb);
-            handleFromRadio(msg);
-          } catch (e) {
-            log('Decode error: ' + e.message, 'err');
-          }
-        }
-      }
-    } catch (e) {
-      if (!signal.aborted) log('Read loop error: ' + e.message, 'err');
-    } finally {
-      try { reader.releaseLock(); } catch {}
-      flushAscii();
-    }
-  }
+                            try {
+                                const msg = Types.FromRadio.decode(pb);
+                                handleFromRadio(msg);
+                            } catch (e) {
+                                log('Decode error: ' + e.message, 'err');
+                            }
+                        }
+                    }
+                } catch (e) {
+                    if (!signal.aborted) log('Read loop error: ' + e.message, 'err');
+                } finally {
+                    try { reader.releaseLock(); } catch { }
+                    flushAscii();
+                }
+            }
 
-  // ---------- Helpers ----------
-  function deepClone(o){return JSON.parse(JSON.stringify(o));}
-  function inflateToString(bytes) {
-    try {
-      const u8 = (bytes instanceof Uint8Array) ? bytes : new Uint8Array(bytes);
-      const out = window.pako ? window.pako.inflate(u8) : null;
-      if (!out) return null;
-      return new TextDecoder().decode(out);
-    } catch { return null; }
-  }
-  function decodeTextPayload(bytes, portnum){
-    if (portnum === 7) {
-      const s = inflateToString(bytes);
-      if (s != null) return s;
-    }
-    try { return new TextDecoder().decode(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)); } catch {}
-    try { const t = Types.Text.decode(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)); if (t && typeof t.text === 'string') return t.text; } catch {}
-    const b = (bytes instanceof Uint8Array) ? bytes : new Uint8Array(bytes);
-    return Array.from(b).map(x=>x.toString(16).padStart(2,'0')).join(' ');
-  }
-  function isViewingThreadFor(num){
-    const k = threadKeyFor(selectedNodeNum);
-    const want = threadKeyFor(num);
-    if (k === want) return true;
-    const hx = hex(num).toLowerCase();
-    const headerText = ($('#chatHeader').textContent || '').toLowerCase();
-    return headerText.includes(hx);
-  }
-  function ensureStubNode(numDec){
-    if (nodes.has(numDec)) return;
-    nodes.set(numDec, {
-      num: numDec,
-      user: { id: hex(numDec), short_name: hex(numDec), long_name: hex(numDec) },
-      last_heard: Math.floor(Date.now()/1000)
-    });
-    renderNodes();
-  }
+            // ---------- Helpers ----------
+            function deepClone(o) { return JSON.parse(JSON.stringify(o)); }
+            function inflateToString(bytes) {
+                try {
+                    const u8 = (bytes instanceof Uint8Array) ? bytes : new Uint8Array(bytes);
+                    const out = window.pako ? window.pako.inflate(u8) : null;
+                    if (!out) return null;
+                    return new TextDecoder().decode(out);
+                } catch { return null; }
+            }
+            function decodeTextPayload(bytes, portnum) {
+                if (portnum === 7) {
+                    const s = inflateToString(bytes);
+                    if (s != null) return s;
+                }
+                try { return new TextDecoder().decode(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)); } catch { }
+                try { const t = Types.Text.decode(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)); if (t && typeof t.text === 'string') return t.text; } catch { }
+                const b = (bytes instanceof Uint8Array) ? bytes : new Uint8Array(bytes);
+                return Array.from(b).map(x => x.toString(16).padStart(2, '0')).join(' ');
+            }
+            function isViewingThreadFor(num) {
+                const k = threadKeyFor(selectedNodeNum);
+                const want = threadKeyFor(num);
+                if (k === want) return true;
+                const hx = hex(num).toLowerCase();
+                const headerText = ($('#chatHeader').textContent || '').toLowerCase();
+                return headerText.includes(hx);
+            }
+            function ensureStubNode(numDec) {
+                if (nodes.has(numDec)) return;
+                nodes.set(numDec, {
+                    num: numDec,
+                    user: { id: hex(numDec), short_name: hex(numDec), long_name: hex(numDec) },
+                    last_heard: Math.floor(Date.now() / 1000)
+                });
+                renderNodes();
+            }
 
-  // NEW: apply a Position protobuf to a node and refresh UI
-  function applyPositionUpdate(numDec, pos, rxTime){
-    ensureStubNode(numDec);
-    const n = nodes.get(numDec) || { num: numDec, user: { short_name: hex(numDec) } };
-    // Normalize: keep integer microdegrees if present
-    const clean = {};
-    if (typeof pos.latitude_i === 'number')  clean.latitude_i  = pos.latitude_i;
-    if (typeof pos.longitude_i === 'number') clean.longitude_i = pos.longitude_i;
-    if (typeof pos.latitude === 'number')    clean.latitude    = pos.latitude;
-    if (typeof pos.longitude === 'number')   clean.longitude   = pos.longitude;
-    if (typeof pos.altitude === 'number')    clean.altitude    = pos.altitude;
-    if (typeof pos.time === 'number')        clean.time        = pos.time;
-    n.position = clean;
-    n.last_heard = rxTime ? (rxTime|0) : Math.floor(Date.now()/1000);
-    nodes.set(numDec, n);
-    upsertMarker(n);
-    renderNodes();
-  }
+            // NEW: apply a Position protobuf to a node and refresh UI
+            function applyPositionUpdate(numDec, pos, rxTime) {
+                ensureStubNode(numDec);
+                const n = nodes.get(numDec) || { num: numDec, user: { short_name: hex(numDec) } };
+                // Normalize: keep integer microdegrees if present
+                const clean = {};
+                if (typeof pos.latitude_i === 'number') clean.latitude_i = pos.latitude_i;
+                if (typeof pos.longitude_i === 'number') clean.longitude_i = pos.longitude_i;
+                if (typeof pos.latitude === 'number') clean.latitude = pos.latitude;
+                if (typeof pos.longitude === 'number') clean.longitude = pos.longitude;
+                if (typeof pos.altitude === 'number') clean.altitude = pos.altitude;
+                if (typeof pos.time === 'number') clean.time = pos.time;
+                n.position = clean;
+                n.last_heard = rxTime ? (rxTime | 0) : Math.floor(Date.now() / 1000);
+                nodes.set(numDec, n);
+                upsertMarker(n);
+                renderNodes();
+            }
 
-  // Single place to route/store/paint inbound text
-  function onInboundText({ srcDec, dstDec, text, idHex = '0', via = 'pb' }) {
-    ensureStubNode(srcDec);
-    const isBroadcast = (dstDec === 0 || dstDec === BROADCAST_NUM);
-    const whoName = nodes.get(srcDec)?.user?.long_name || nodes.get(srcDec)?.user?.short_name || `#${srcDec}`;
-    const n = nodes.get(srcDec);
-    if (n) { n.last_heard = Math.floor(Date.now()/1000); nodes.set(srcDec, n); renderNodes(); }
+            // Single place to route/store/paint inbound text
+            function onInboundText({ srcDec, dstDec, text, idHex = '0', via = 'pb' }) {
+                ensureStubNode(srcDec);
+                const isBroadcast = (dstDec === 0 || dstDec === BROADCAST_NUM);
+                const whoName = nodes.get(srcDec)?.user?.long_name || nodes.get(srcDec)?.user?.short_name || `#${srcDec}`;
+                const n = nodes.get(srcDec);
+                if (n) { n.last_heard = Math.floor(Date.now() / 1000); nodes.set(srcDec, n); renderNodes(); }
 
-    if (isBroadcast) {
-      threadAppend(BROADCAST_NUM, { me:false, text, ts:Date.now(), from:srcDec, to:dstDec, via });
-      if (isViewingThreadFor(BROADCAST_NUM)) addMsg({ who: whoName, text, mine: false }); else incUnread(BROADCAST_NUM);
-      threadAppend(srcDec, { me:false, text, ts:Date.now(), from:srcDec, to:dstDec, via });
-      if (isViewingThreadFor(srcDec)) addMsg({ who: whoName, text, mine: false }); else incUnread(srcDec);
-    } else {
-      threadAppend(srcDec, { me:false, text, ts:Date.now(), from:srcDec, to:dstDec, via });
-      if (isViewingThreadFor(srcDec)) addMsg({ who: whoName, text, mine: false }); else incUnread(srcDec);
-    }
-  }
+                if (isBroadcast) {
+                    threadAppend(BROADCAST_NUM, { me: false, text, ts: Date.now(), from: srcDec, to: dstDec, via });
+                    if (isViewingThreadFor(BROADCAST_NUM)) addMsg({ who: whoName, text, mine: false }); else incUnread(BROADCAST_NUM);
+                    threadAppend(srcDec, { me: false, text, ts: Date.now(), from: srcDec, to: dstDec, via });
+                    if (isViewingThreadFor(srcDec)) addMsg({ who: whoName, text, mine: false }); else incUnread(srcDec);
+                } else {
+                    threadAppend(srcDec, { me: false, text, ts: Date.now(), from: srcDec, to: dstDec, via });
+                    if (isViewingThreadFor(srcDec)) addMsg({ who: whoName, text, mine: false }); else incUnread(srcDec);
+                }
+            }
 
-  // ---------- Protocol handlers ----------
-  function handleFromRadio(fr) {
-    if (fr.my_info) {
-      const count = fr.my_info.nodedb_count || 0;
-      if (typeof fr.my_info.my_node_num === 'number') {
-        myNodeNum = fr.my_info.my_node_num >>> 0;
-        localStorage.setItem(LAST_DEVICE_KEY, String(myNodeNum));
-        $('#selfInfo').textContent = `Me: #${myNodeNum} (${hex(myNodeNum)})`;
-        log(`My node #: ${myNodeNum} (${hex(myNodeNum)})`, 'ok');
-      }
-      $('#syncState').textContent = `Syncing NodeDB… (${count} nodes expected)`;
-      return;
-    }
-    if (fr.node_info) {
-      const n = fr.node_info;
-      nodes.set(n.num, deepClone(n));
-      renderNodes();
-      upsertMarker(n);
-      return;
-    }
-    if (fr.config_complete_id != null) {
-      if (lastWantConfigNonce && fr.config_complete_id === lastWantConfigNonce) {
-        $('#syncState').textContent = 'Sync complete';
-        fitMapToMarkers();
-      }
-      return;
-    }
+            // ---------- Protocol handlers ----------
+            function handleFromRadio(fr) {
+                if (fr.my_info) {
+                    const count = fr.my_info.nodedb_count || 0;
+                    if (typeof fr.my_info.my_node_num === 'number') {
+                        myNodeNum = fr.my_info.my_node_num >>> 0;
+                        localStorage.setItem(LAST_DEVICE_KEY, String(myNodeNum));
+                        $('#selfInfo').textContent = `Me: #${myNodeNum} (${hex(myNodeNum)})`;
+                        log(`My node #: ${myNodeNum} (${hex(myNodeNum)})`, 'ok');
+                    }
+                    $('#syncState').textContent = `Syncing NodeDB… (${count} nodes expected)`;
+                    return;
+                }
+                if (fr.node_info) {
+                    const n = fr.node_info;
+                    nodes.set(n.num, deepClone(n));
+                    renderNodes();
+                    upsertMarker(n);
+                    return;
+                }
+                if (fr.config_complete_id != null) {
+                    if (lastWantConfigNonce && fr.config_complete_id === lastWantConfigNonce) {
+                        $('#syncState').textContent = 'Sync complete';
+                        fitMapToMarkers();
+                    }
+                    return;
+                }
 
-    if (fr.packet) {
-      const p = fr.packet;
-      if (p.decoded) {
-        const d = p.decoded;
-        const portnum = d.portnum|0;
-        const envFrom = (p.from>>>0);
-        const envTo   = (p.to>>>0);
-        const src = (Number.isInteger(d.source) && d.source !== 0) ? (d.source>>>0) : envFrom;
-        const dstCandidate = (Number.isInteger(d.dest) && d.dest !== 0) ? (d.dest>>>0) : envTo;
-        const isBroadcast = (dstCandidate === 0 || dstCandidate === BROADCAST_NUM);
-        const dst = isBroadcast ? BROADCAST_NUM : dstCandidate;
+                if (fr.packet) {
+                    const p = fr.packet;
+                    if (p.decoded) {
+                        const d = p.decoded;
+                        const portnum = d.portnum | 0;
+                        const envFrom = (p.from >>> 0);
+                        const envTo = (p.to >>> 0);
+                        const src = (Number.isInteger(d.source) && d.source !== 0) ? (d.source >>> 0) : envFrom;
+                        const dstCandidate = (Number.isInteger(d.dest) && d.dest !== 0) ? (d.dest >>> 0) : envTo;
+                        const isBroadcast = (dstCandidate === 0 || dstCandidate === BROADCAST_NUM);
+                        const dst = isBroadcast ? BROADCAST_NUM : dstCandidate;
 
-        // TEXT
-        if ((portnum === 1 || portnum === 7) && d.payload) {
-          const txt = decodeTextPayload(d.payload, portnum);
-          const idHex = hex(p.id>>>0);
-          const key = makeDedupKey(src, idHex, txt);
-          if (!seenMsgs.has(key)) {
-            rememberMsg(key);
-            onInboundText({ srcDec: src, dstDec: dst, text: txt, idHex, via: 'pb' });
-          }
-          return;
-        }
+                        // TEXT
+                        if ((portnum === 1 || portnum === 7) && d.payload) {
+                            const txt = decodeTextPayload(d.payload, portnum);
+                            const idHex = hex(p.id >>> 0);
+                            const key = makeDedupKey(src, idHex, txt);
+                            if (!seenMsgs.has(key)) {
+                                rememberMsg(key);
+                                onInboundText({ srcDec: src, dstDec: dst, text: txt, idHex, via: 'pb' });
+                            }
+                            return;
+                        }
 
-        // NEW: POSITION_APP
-        if (portnum === 3 && d.payload) {
-          try {
-            const pos = Types.Position.decode(d.payload instanceof Uint8Array ? d.payload : new Uint8Array(d.payload));
-            applyPositionUpdate(src, pos, p.rx_time|0);
-          } catch (e) {
-            log('Position decode error: ' + e.message, 'warn');
-          }
-          return;
-        }
-      } else if (p.encrypted) {
-        log(`pkt encrypted len=${p.encrypted?.length ?? 0} from=${hex(p.from>>>0)} to=${hex(p.to>>>0)} ch=${p.channel|0}`, 'warn');
-      }
-      return;
-    }
-  }
+                        // NEW: POSITION_APP
+                        if (portnum === 3 && d.payload) {
+                            try {
+                                const pos = Types.Position.decode(d.payload instanceof Uint8Array ? d.payload : new Uint8Array(d.payload));
+                                applyPositionUpdate(src, pos, p.rx_time | 0);
+                            } catch (e) {
+                                log('Position decode error: ' + e.message, 'warn');
+                            }
+                            return;
+                        }
+                    } else if (p.encrypted) {
+                        log(`pkt encrypted len=${p.encrypted?.length ?? 0} from=${hex(p.from >>> 0)} to=${hex(p.to >>> 0)} ch=${p.channel | 0}`, 'warn');
+                    }
+                    return;
+                }
+            }
 
-  // ---------- UI rendering ----------
-  function renderNodes() {
-    const list = $('#nodes');
-    list.innerHTML = '';
+            // ---------- UI rendering ----------
+            function renderNodes() {
+                const list = $('#nodes');
+                list.innerHTML = '';
 
-    const publicDiv = document.createElement('div');
-    publicDiv.className = 'node' + ((threadKeyFor(selectedNodeNum)==='public')?' selected':'');
-    publicDiv.innerHTML = `<div class="name">Public <span class="metrics">(^all ch0)</span></div>`;
-    const pubUnread = getUnread(BROADCAST_NUM);
-    if (pubUnread > 0) {
-      const b = document.createElement('div');
-      b.className = 'bubble'; b.textContent = String(pubUnread);
-      publicDiv.appendChild(b);
-    }
-    publicDiv.onclick = () => { selectThread(BROADCAST_NUM, 'Public (^all ch0)'); activateChatTab(); };
-    list.appendChild(publicDiv);
+                const publicDiv = document.createElement('div');
+                publicDiv.className = 'node' + ((threadKeyFor(selectedNodeNum) === 'public') ? ' selected' : '');
+                publicDiv.innerHTML = `<div class="name">Public <span class="metrics">(^all ch0)</span></div>`;
+                const pubUnread = getUnread(BROADCAST_NUM);
+                if (pubUnread > 0) {
+                    const b = document.createElement('div');
+                    b.className = 'bubble'; b.textContent = String(pubUnread);
+                    publicDiv.appendChild(b);
+                }
+                publicDiv.onclick = () => { selectThread(BROADCAST_NUM, 'Public (^all ch0)'); activateChatTab(); };
+                list.appendChild(publicDiv);
 
-    const arr = Array.from(nodes.values()).sort((a,b)=> (b.last_heard||0)-(a.last_heard||0));
-    $('#nodeCount').textContent = arr.length;
+                const arr = Array.from(nodes.values()).sort((a, b) => (b.last_heard || 0) - (a.last_heard || 0));
+                $('#nodeCount').textContent = arr.length;
 
-    arr.forEach(n => {
-      const div = document.createElement('div');
-      div.className = 'node' + ((threadKeyFor(selectedNodeNum)===String(n.num))?' selected':'');
-      const title = n.user?.long_name || n.user?.short_name || n.user?.id || `#${n.num}`;
-      const batt = n.device_metrics?.battery_level;
-      const volt = n.device_metrics?.voltage;
-      const last = n.last_heard ? new Date(n.last_heard * 1000).toLocaleTimeString() : '—';
-      let posStr = '—';
-      const ll = getLatLonFromPos(n.position);
-      if (ll) posStr = `${ll[0].toFixed(5)}, ${ll[1].toFixed(5)}`;
+                arr.forEach(n => {
+                    const div = document.createElement('div');
+                    div.className = 'node' + ((threadKeyFor(selectedNodeNum) === String(n.num)) ? ' selected' : '');
+                    const title = n.user?.long_name || n.user?.short_name || n.user?.id || `#${n.num}`;
+                    const batt = n.device_metrics?.battery_level;
+                    const volt = n.device_metrics?.voltage;
+                    const last = n.last_heard ? new Date(n.last_heard * 1000).toLocaleTimeString() : '—';
+                    let posStr = '—';
+                    const ll = getLatLonFromPos(n.position);
+                    if (ll) posStr = `${ll[0].toFixed(5)}, ${ll[1].toFixed(5)}`;
 
-      div.innerHTML = `
+                    div.innerHTML = `
         <div class="name">${escapeHtml(title)}</div>
         <div class="metrics">
           <span>#${n.num} (${hex(n.num)})</span>
           <span>last: ${last}</span>
-          ${batt!=null ? `<span>bat: ${batt}%</span>` : ``}
+          ${batt != null ? `<span>bat: ${batt}%</span>` : ``}
           ${Number.isFinite(volt) ? `<span>${volt.toFixed(2)}V</span>` : ``}
           <span>pos: ${posStr}</span>
         </div>`;
 
-      const count = getUnread(n.num);
-      if (count > 0) {
-        const b = document.createElement('div');
-        b.className = 'bubble'; b.textContent = String(count);
-        div.appendChild(b);
-      }
+                    const count = getUnread(n.num);
+                    if (count > 0) {
+                        const b = document.createElement('div');
+                        b.className = 'bubble'; b.textContent = String(count);
+                        div.appendChild(b);
+                    }
 
-      div.addEventListener('click', () => {
-        selectThread(n.num, `${title} (#${n.num} | ${hex(n.num)})`);
-        activateChatTab();
-      });
-      list.appendChild(div);
-    });
-  }
+                    div.addEventListener('click', () => {
+                        selectThread(n.num, `${title} (#${n.num} | ${hex(n.num)})`);
+                        activateChatTab();
+                    });
+                    list.appendChild(div);
+                });
+            }
 
-  function selectThread(num, title) {
-    selectedNodeNum = num;
-    localStorage.setItem('meshtastic_last_thread', threadKeyFor(num));
-    clearUnread(num);
-    renderNodes();
-    $('#chatHeader').innerHTML = `Chat with ${escapeHtml(title)}`;
-    $('#btnSend').disabled = (selectedNodeNum==null);
-    renderThread(num);
-  }
+            function selectThread(num, title) {
+                selectedNodeNum = num;
+                localStorage.setItem('meshtastic_last_thread', threadKeyFor(num));
+                clearUnread(num);
+                renderNodes();
+                $('#chatHeader').innerHTML = `Chat with ${escapeHtml(title)}`;
+                $('#btnSend').disabled = (selectedNodeNum == null);
+                renderThread(num);
+            }
 
-  function renderThread(num){
-    const msgsEl = $('#msgs'); msgsEl.innerHTML = '';
-    const data = threadGet(num);
-    for (const m of data) {
-      const who = m.me ? 'me' : (m.from != null ? (nodes.get(m.from)?.user?.short_name || nodes.get(m.from)?.user?.long_name || `#${m.from}`) : 'them');
-      addMsg({ who, text: m.text, mine: !!m.me });
-    }
-    msgsEl.scrollTop = msgsEl.scrollHeight;
-  }
+            function renderThread(num) {
+                const msgsEl = $('#msgs'); msgsEl.innerHTML = '';
+                const data = threadGet(num);
+                for (const m of data) {
+                    const who = m.me ? 'me' : (m.from != null ? (nodes.get(m.from)?.user?.short_name || nodes.get(m.from)?.user?.long_name || `#${m.from}`) : 'them');
+                    addMsg({ who, text: m.text, mine: !!m.me });
+                }
+                msgsEl.scrollTop = msgsEl.scrollHeight;
+            }
 
-  function addMsg({who, text, mine=false}) {
-    const wrap = document.createElement('div');
-    wrap.className = 'msg ' + (mine ? 'me' : 'them');
-    wrap.textContent = (mine ? text : `${who}: ${text}`);
-    $('#msgs').appendChild(wrap);
-    const msgs = $('#msgs'); msgs.scrollTop = msgs.scrollHeight;
-  }
+            function addMsg({ who, text, mine = false }) {
+                const wrap = document.createElement('div');
+                wrap.className = 'msg ' + (mine ? 'me' : 'them');
+                wrap.textContent = (mine ? text : `${who}: ${text}`);
+                $('#msgs').appendChild(wrap);
+                const msgs = $('#msgs'); msgs.scrollTop = msgs.scrollHeight;
+            }
 
-  // ---------- Messaging (DM + Public) ----------
-  async function sendText(toNodeNum, text) {
-    if (!writer) throw new Error('Not connected');
-    const payloadBytes = encoder.encode(text);
-    const isPublicSel = (threadKeyFor(toNodeNum) === 'public');
-    const dest = isPublicSel ? (0xFFFFFFFF>>>0) : (toNodeNum>>>0);
-    const data = { portnum: 1, payload: payloadBytes, want_response: false, dest };
-    const mp = { to: dest, channel: 0, decoded: data };
-    await writeToRadio({ packet: mp });
-    threadAppend(dest, { me:true, text, ts:Date.now(), to:dest });
-    addMsg({ who:'me', text, mine:true });
-  }
+            // ---------- Messaging (DM + Public) ----------
+            async function sendText(toNodeNum, text) {
+                if (!writer) throw new Error('Not connected');
+                const payloadBytes = encoder.encode(text);
+                const isPublicSel = (threadKeyFor(toNodeNum) === 'public');
+                const dest = isPublicSel ? (0xFFFFFFFF >>> 0) : (toNodeNum >>> 0);
+                const data = { portnum: 1, payload: payloadBytes, want_response: false, dest };
+                const mp = { to: dest, channel: 0, decoded: data };
+                await writeToRadio({ packet: mp });
+                threadAppend(dest, { me: true, text, ts: Date.now(), to: dest });
+                addMsg({ who: 'me', text, mine: true });
+            }
 
-  // ---------- Send Browser Info ----------
-  function getBrowserInfoText(){
-    const ua = navigator.userAgent || 'N/A';
-    const plat = navigator.platform || 'N/A';
-    const lang = navigator.language || 'N/A';
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'N/A';
-    const scr = (window.screen && `${window.screen.width}x${window.screen.height}`) || 'N/A';
-    const vp = `${window.innerWidth}x${window.innerHeight}`;
-    return `BROWSER INFO
+            // ---------- Send Browser Info ----------
+            function getBrowserInfoText() {
+                const ua = navigator.userAgent || 'N/A';
+                const plat = navigator.platform || 'N/A';
+                const lang = navigator.language || 'N/A';
+                const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'N/A';
+                const scr = (window.screen && `${window.screen.width}x${window.screen.height}`) || 'N/A';
+                const vp = `${window.innerWidth}x${window.innerHeight}`;
+                return `BROWSER INFO
 UA: ${ua}
 Platform: ${plat}
 Lang: ${lang}
 TZ: ${tz}
 Screen: ${scr}
 Viewport: ${vp}`;
-  }
-  async function sendBrowserInfo(){
-    const dest = ($('#shareDest').value === 'public') ? BROADCAST_NUM : (selectedNodeNum ?? BROADCAST_NUM);
-    await sendText(dest, getBrowserInfoText());
-  }
+            }
+            async function sendBrowserInfo() {
+                const dest = ($('#shareDest').value === 'public') ? BROADCAST_NUM : (selectedNodeNum ?? BROADCAST_NUM);
+                await sendText(dest, getBrowserInfoText());
+            }
 
-  // ---------- Send Position (Position protobuf on port 3) ----------
-  async function sendPosition(toNum, lat, lon, altitude=null){
-    if (!writer) throw new Error('Not connected');
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) throw new Error('Invalid lat/lon');
+            // ---------- Send Position (Position protobuf on port 3) ----------
+            async function sendPosition(toNum, lat, lon, altitude = null) {
+                if (!writer) throw new Error('Not connected');
+                if (!Number.isFinite(lat) || !Number.isFinite(lon)) throw new Error('Invalid lat/lon');
 
-    const pos = {
-      latitude_i: Math.round(lat * 1e7),
-      longitude_i: Math.round(lon * 1e7),
-      time: Math.floor(Date.now()/1000)
-    };
-    if (Number.isFinite(altitude)) pos.altitude = Math.round(altitude);
+                const pos = {
+                    latitude_i: Math.round(lat * 1e7),
+                    longitude_i: Math.round(lon * 1e7),
+                    time: Math.floor(Date.now() / 1000)
+                };
+                if (Number.isFinite(altitude)) pos.altitude = Math.round(altitude);
 
-    const payload = Types.Position.encode(Types.Position.create(pos)).finish();
-    const dest = (threadKeyFor(toNum) === 'public') ? (0xFFFFFFFF>>>0) : (toNum>>>0);
-    const data = { portnum: 3, payload, want_response: false, dest };
-    const mp = { to: dest, channel: 0, decoded: data };
-    await writeToRadio({ packet: mp });
+                const payload = Types.Position.encode(Types.Position.create(pos)).finish();
+                const dest = (threadKeyFor(toNum) === 'public') ? (0xFFFFFFFF >>> 0) : (toNum >>> 0);
+                const data = { portnum: 3, payload, want_response: false, dest };
+                const mp = { to: dest, channel: 0, decoded: data };
+                await writeToRadio({ packet: mp });
 
-    // Update OUR own node locally so UI reflects it immediately (if we know our node id)
-    if (myNodeNum != null) applyPositionUpdate(myNodeNum>>>0, pos, Math.floor(Date.now()/1000));
+                // Update OUR own node locally so UI reflects it immediately (if we know our node id)
+                if (myNodeNum != null) applyPositionUpdate(myNodeNum >>> 0, pos, Math.floor(Date.now() / 1000));
 
-    // Optional chat breadcrumb
-    const text = `📍 Location: ${lat.toFixed(6)}, ${lon.toFixed(6)}${Number.isFinite(altitude)?` alt=${Math.round(altitude)}m`:''}`;
-    threadAppend(dest, { me:true, text, ts:Date.now(), to:dest });
-    if (isViewingThreadFor(dest)) addMsg({ who:'me', text, mine:true });
-  }
+                // Optional chat breadcrumb
+                const text = `📍 Location: ${lat.toFixed(6)}, ${lon.toFixed(6)}${Number.isFinite(altitude) ? ` alt=${Math.round(altitude)}m` : ''}`;
+                threadAppend(dest, { me: true, text, ts: Date.now(), to: dest });
+                if (isViewingThreadFor(dest)) addMsg({ who: 'me', text, mine: true });
+            }
 
-  async function getCurrentPositionOnce(){
-    return new Promise((resolve, reject) => {
-      if (!navigator.geolocation) return reject(new Error('Geolocation not supported'));
-      navigator.geolocation.getCurrentPosition(
-        pos => resolve(pos),
-        err => reject(err),
-        { enableHighAccuracy:true, timeout:10000, maximumAge:0 }
-      );
-    });
-  }
+            async function getCurrentPositionOnce() {
+                return new Promise((resolve, reject) => {
+                    if (!navigator.geolocation) return reject(new Error('Geolocation not supported'));
+                    navigator.geolocation.getCurrentPosition(
+                        pos => resolve(pos),
+                        err => reject(err),
+                        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+                    );
+                });
+            }
 
-  async function sendLocationOnce(){
-    try {
-      const dest = ($('#shareDest').value === 'public') ? BROADCAST_NUM : (selectedNodeNum ?? BROADCAST_NUM);
-      const gp = await getCurrentPositionOnce();
-      await sendPosition(dest, gp.coords.latitude, gp.coords.longitude, gp.coords.altitude ?? null);
-    } catch(e) {
-      log('Location send failed: ' + e.message, 'err');
-    }
-  }
+            async function sendLocationOnce() {
+                try {
+                    const dest = ($('#shareDest').value === 'public') ? BROADCAST_NUM : (selectedNodeNum ?? BROADCAST_NUM);
+                    const gp = await getCurrentPositionOnce();
+                    await sendPosition(dest, gp.coords.latitude, gp.coords.longitude, gp.coords.altitude ?? null);
+                } catch (e) {
+                    log('Location send failed: ' + e.message, 'err');
+                }
+            }
 
-  let locTimer = null;
-  function startLocationInterval(){
-    if (locTimer) return;
-    const secs = Math.max(5, Number($('#locInterval').value) || 60);
-    $('#btnLocStart').disabled = true;
-    $('#btnLocStop').disabled = false;
-    locTimer = setInterval(async () => {
-      try {
-        const dest = ($('#shareDest').value === 'public') ? BROADCAST_NUM : (selectedNodeNum ?? BROADCAST_NUM);
-        const gp = await getCurrentPositionOnce();
-        await sendPosition(dest, gp.coords.latitude, gp.coords.longitude, gp.coords.altitude ?? null);
-      } catch(e) {
-        log('Location interval send failed: ' + e.message, 'warn');
-      }
-    }, secs * 1000);
-    log(`Location sharing every ${secs}s started`, 'ok');
-  }
-  function stopLocationInterval(){
-    if (locTimer) {
-      clearInterval(locTimer);
-      locTimer = null;
-      $('#btnLocStart').disabled = false;
-      $('#btnLocStop').disabled = true;
-      log('Location sharing stopped', 'ok');
-    }
-  }
+            let locTimer = null;
+            function startLocationInterval() {
+                if (locTimer) return;
+                const secs = Math.max(5, Number($('#locInterval').value) || 60);
+                $('#btnLocStart').disabled = true;
+                $('#btnLocStop').disabled = false;
+                locTimer = setInterval(async () => {
+                    try {
+                        const dest = ($('#shareDest').value === 'public') ? BROADCAST_NUM : (selectedNodeNum ?? BROADCAST_NUM);
+                        const gp = await getCurrentPositionOnce();
+                        await sendPosition(dest, gp.coords.latitude, gp.coords.longitude, gp.coords.altitude ?? null);
+                    } catch (e) {
+                        log('Location interval send failed: ' + e.message, 'warn');
+                    }
+                }, secs * 1000);
+                log(`Location sharing every ${secs}s started`, 'ok');
+            }
+            function stopLocationInterval() {
+                if (locTimer) {
+                    clearInterval(locTimer);
+                    locTimer = null;
+                    $('#btnLocStart').disabled = false;
+                    $('#btnLocStop').disabled = true;
+                    log('Location sharing stopped', 'ok');
+                }
+            }
 
-  // ---------- Connect / handshake ----------
-  async function connect() {
-    await initProtobuf();
-    if (!port) throw new Error('No port chosen');
-    if (!(port.readable || port.writable)) {
-      await port.open({ baudRate: 115200, dataBits: 8, stopBits: 1, parity: "none", flowControl: "none" });
-    }
-    writer = port.writable.getWriter();
-    $('#portInfo').textContent = 'Connected @ 115200';
+            // ---------- Connect / handshake ----------
+            async function connect() {
+                await initProtobuf();
+                if (!port) throw new Error('No port chosen');
+                if (!(port.readable || port.writable)) {
+                    await port.open({ baudRate: 115200, dataBits: 8, stopBits: 1, parity: "none", flowControl: "none" });
+                }
+                writer = port.writable.getWriter();
+                $('#portInfo').textContent = 'Connected @ 115200';
 
-    try {
-      const info = port.getInfo?.();
-      if (info && (info.usbVendorId || info.usbProductId)) {
-        localStorage.setItem(LAST_PORT_KEY, JSON.stringify({ usbVendorId: info.usbVendorId||null, usbProductId: info.usbProductId||null }));
-      }
-    } catch {}
+                try {
+                    const info = port.getInfo?.();
+                    if (info && (info.usbVendorId || info.usbProductId)) {
+                        localStorage.setItem(LAST_PORT_KEY, JSON.stringify({ usbVendorId: info.usbVendorId || null, usbProductId: info.usbProductId || null }));
+                    }
+                } catch { }
 
-    nodes.clear(); renderNodes();
-    markers.forEach(m=>m.remove()); markers.clear();
-    $('#syncState').textContent = 'Syncing NodeDB…';
-    startReadLoop();
+                nodes.clear(); renderNodes();
+                markers.forEach(m => m.remove()); markers.clear();
+                $('#syncState').textContent = 'Syncing NodeDB…';
+                startReadLoop();
 
-    await requestNodeDb();
-    startHeartbeat();
+                await requestNodeDb();
+                startHeartbeat();
 
-    const lastKey = localStorage.getItem('meshtastic_last_thread');
-    if (lastKey) {
-      if (lastKey === 'public') selectThread(BROADCAST_NUM, 'Public (^all ch0)');
-      else selectThread(Number(lastKey), (nodes.get(Number(lastKey))?.user?.short_name || nodes.get(Number(lastKey))?.user?.long_name || `#${lastKey}`));
-    } else {
-      selectThread(BROADCAST_NUM, 'Public (^all ch0)');
-    }
-  }
+                const lastKey = localStorage.getItem('meshtastic_last_thread');
+                if (lastKey) {
+                    if (lastKey === 'public') selectThread(BROADCAST_NUM, 'Public (^all ch0)');
+                    else selectThread(Number(lastKey), (nodes.get(Number(lastKey))?.user?.short_name || nodes.get(Number(lastKey))?.user?.long_name || `#${lastKey}`));
+                } else {
+                    selectThread(BROADCAST_NUM, 'Public (^all ch0)');
+                }
+            }
 
-  async function requestNodeDb() {
-    lastWantConfigNonce = (Math.random() * 0xffffffff) >>> 0;
-    log(`Requesting NodeDB (nonce=${lastWantConfigNonce})`, 'ok');
-    await writeToRadio({ want_config_id: lastWantConfigNonce });
-  }
+            async function requestNodeDb() {
+                lastWantConfigNonce = (Math.random() * 0xffffffff) >>> 0;
+                log(`Requesting NodeDB (nonce=${lastWantConfigNonce})`, 'ok');
+                await writeToRadio({ want_config_id: lastWantConfigNonce });
+            }
 
-  let hbTimer = null;
-  function startHeartbeat() {
-    stopHeartbeat();
-    hbTimer = setInterval(async () => {
-      try {
-        const n = (Math.random() * 0xffffffff) >>> 0;
-        await writeToRadio({ heartbeat: { nonce: n }});
-      } catch(e) {
-        log('Heartbeat failed: '+e.message, 'warn');
-      }
-    }, 8000);
-  }
-  function stopHeartbeat(){ if (hbTimer) { clearInterval(hbTimer); hbTimer=null; } }
+            let hbTimer = null;
+            function startHeartbeat() {
+                stopHeartbeat();
+                hbTimer = setInterval(async () => {
+                    try {
+                        const n = (Math.random() * 0xffffffff) >>> 0;
+                        await writeToRadio({ heartbeat: { nonce: n } });
+                    } catch (e) {
+                        log('Heartbeat failed: ' + e.message, 'warn');
+                    }
+                }, 8000);
+            }
+            function stopHeartbeat() { if (hbTimer) { clearInterval(hbTimer); hbTimer = null; } }
 
-  async function disconnect() {
-    stopHeartbeat();
-    stopLocationInterval();
-    try {
-      if (writer) {
-        try { await writeToRadio({ disconnect: true }); } catch {}
-        writer.releaseLock();
-      }
-      if (readLoopAbortController) readLoopAbortController.abort();
-      if (reader) reader.releaseLock();
-      if (port) await port.close();
-    } catch (e) {
-      log('Disconnect error: '+e.message, 'err');
-    } finally {
-      writer = null; reader = null;
-      flushAscii();
-      flushLog();
-      $('#portInfo').textContent = 'Not connected';
-      $('#btnSend').disabled = true;
-      $('#btnRefresh').disabled = true;
-      $('#btnDisconnect').disabled = true;
-      $('#btnConnect').disabled = !allowed;
-      $('#syncState').textContent = '';
-    }
-  }
+            async function disconnect() {
+                stopHeartbeat();
+                stopLocationInterval();
+                try {
+                    if (writer) {
+                        try { await writeToRadio({ disconnect: true }); } catch { }
+                        writer.releaseLock();
+                    }
+                    if (readLoopAbortController) readLoopAbortController.abort();
+                    if (reader) reader.releaseLock();
+                    if (port) await port.close();
+                } catch (e) {
+                    log('Disconnect error: ' + e.message, 'err');
+                } finally {
+                    writer = null; reader = null;
+                    flushAscii();
+                    flushLog();
+                    $('#portInfo').textContent = 'Not connected';
+                    $('#btnSend').disabled = true;
+                    $('#btnRefresh').disabled = true;
+                    $('#btnDisconnect').disabled = true;
+                    $('#btnConnect').disabled = !allowed;
+                    $('#syncState').textContent = '';
+                }
+            }
 
-  // ---------- Auto-connect memory ----------
-  async function tryAutoConnect(){
-    try {
-      const stored = JSON.parse(localStorage.getItem(LAST_PORT_KEY) || 'null');
-      const ports = await navigator.serial?.getPorts?.() ?? [];
-      if (!ports.length) return false;
+            // ---------- Auto-connect memory ----------
+            async function tryAutoConnect() {
+                try {
+                    const stored = JSON.parse(localStorage.getItem(LAST_PORT_KEY) || 'null');
+                    const ports = await navigator.serial?.getPorts?.() ?? [];
+                    if (!ports.length) return false;
 
-      let chosen = null;
+                    let chosen = null;
 
-      if (stored && (stored.usbVendorId || stored.usbProductId)) {
-        for (const p of ports) {
-          const info = p.getInfo?.() || {};
-          if ((stored.usbVendorId == null || stored.usbVendorId === info.usbVendorId) &&
-              (stored.usbProductId == null || stored.usbProductId === info.usbProductId)) {
-            chosen = p; break;
-          }
-        }
-      }
+                    if (stored && (stored.usbVendorId || stored.usbProductId)) {
+                        for (const p of ports) {
+                            const info = p.getInfo?.() || {};
+                            if ((stored.usbVendorId == null || stored.usbVendorId === info.usbVendorId) &&
+                                (stored.usbProductId == null || stored.usbProductId === info.usbProductId)) {
+                                chosen = p; break;
+                            }
+                        }
+                    }
 
-      if (!chosen && ports.length === 1) {
-        chosen = ports[0];
-      }
+                    if (!chosen && ports.length === 1) {
+                        chosen = ports[0];
+                    }
 
-      if (chosen) {
-        port = chosen;
-        $('#portInfo').textContent = 'Auto-connecting…';
-        $('#btnConnect').disabled = true;
-        $('#btnDisconnect').disabled = false;
-        $('#btnRefresh').disabled = false;
-        await connect();
-        log('Auto-connected to last known port', 'ok');
-        return true;
-      }
-    } catch (e) {
-      log('Auto-connect failed: ' + e.message, 'warn');
-    }
-    return false;
-  }
+                    if (chosen) {
+                        port = chosen;
+                        $('#portInfo').textContent = 'Auto-connecting…';
+                        $('#btnConnect').disabled = true;
+                        $('#btnDisconnect').disabled = false;
+                        $('#btnRefresh').disabled = false;
+                        await connect();
+                        log('Auto-connected to last known port', 'ok');
+                        return true;
+                    }
+                } catch (e) {
+                    log('Auto-connect failed: ' + e.message, 'warn');
+                }
+                return false;
+            }
 
-  if (navigator.serial && navigator.serial.addEventListener) {
-    navigator.serial.addEventListener('connect', async () => {
-      log('Serial device connected', 'ok');
-      if (!writer) { await tryAutoConnect(); }
-    });
-    navigator.serial.addEventListener('disconnect', () => {
-      log('Serial device disconnected', 'warn');
-    });
-  }
+            if (navigator.serial && navigator.serial.addEventListener) {
+                navigator.serial.addEventListener('connect', async () => {
+                    log('Serial device connected', 'ok');
+                    if (!writer) { await tryAutoConnect(); }
+                });
+                navigator.serial.addEventListener('disconnect', () => {
+                    log('Serial device disconnected', 'warn');
+                });
+            }
 
-  // ---------- Buttons ----------
-  $('#btnRequest').onclick = async () => {
-    if (!('serial' in navigator)) {
-      alert('WebSerial not supported in this browser.');
-      return;
-    }
-    try {
-      port = await navigator.serial.requestPort({});
-      allowed = true;
-      $('#portInfo').textContent = 'Port chosen';
-      $('#btnConnect').disabled = false;
-      try {
-        const info = port.getInfo?.();
-        if (info && (info.usbVendorId || info.usbProductId)) {
-          localStorage.setItem(LAST_PORT_KEY, JSON.stringify({ usbVendorId: info.usbVendorId||null, usbProductId: info.usbProductId||null }));
-        }
-      } catch {}
-    } catch (e) {
-      if (e && e.name !== 'NotFoundError') log('requestPort: ' + e.message, 'err');
-    }
-  };
+            // ---------- Buttons ----------
+            $('#btnRequest').onclick = async () => {
+                if (!('serial' in navigator)) {
+                    alert('WebSerial not supported in this browser.');
+                    return;
+                }
+                try {
+                    port = await navigator.serial.requestPort({});
+                    allowed = true;
+                    $('#portInfo').textContent = 'Port chosen';
+                    $('#btnConnect').disabled = false;
+                    try {
+                        const info = port.getInfo?.();
+                        if (info && (info.usbVendorId || info.usbProductId)) {
+                            localStorage.setItem(LAST_PORT_KEY, JSON.stringify({ usbVendorId: info.usbVendorId || null, usbProductId: info.usbProductId || null }));
+                        }
+                    } catch { }
+                } catch (e) {
+                    if (e && e.name !== 'NotFoundError') log('requestPort: ' + e.message, 'err');
+                }
+            };
 
-  $('#btnConnect').onclick = async () => {
-    try {
-      $('#btnConnect').disabled = true;
-      $('#btnDisconnect').disabled = false;
-      $('#btnRefresh').disabled = false;
-      await connect();
-    } catch (e) {
-      log('Failed to open serial port: ' + e.message, 'err');
-      $('#btnConnect').disabled = !allowed;
-      console.warn('If on Linux and seeing NetworkError: try: DEV=$(ls -1 /dev/ttyACM* /dev/ttyUSB* 2>/dev/null | head -n1); sudo setfacl -m u:"$USER":rw "$DEV"');
-    }
-  };
+            $('#btnConnect').onclick = async () => {
+                try {
+                    $('#btnConnect').disabled = true;
+                    $('#btnDisconnect').disabled = false;
+                    $('#btnRefresh').disabled = false;
+                    await connect();
+                } catch (e) {
+                    log('Failed to open serial port: ' + e.message, 'err');
+                    $('#btnConnect').disabled = !allowed;
+                    console.warn('If on Linux and seeing NetworkError: try: DEV=$(ls -1 /dev/ttyACM* /dev/ttyUSB* 2>/dev/null | head -n1); sudo setfacl -m u:"$USER":rw "$DEV"');
+                }
+            };
 
-  $('#btnRefresh').onclick = async () => {
-    try { await requestNodeDb(); } catch(e){ log('Refresh failed: ' + e.message, 'err'); }
-  };
-  $('#btnDisconnect').onclick = disconnect;
+            $('#btnRefresh').onclick = async () => {
+                try { await requestNodeDb(); } catch (e) { log('Refresh failed: ' + e.message, 'err'); }
+            };
+            $('#btnDisconnect').onclick = disconnect;
 
-  $('#btnSend').onclick = async () => {
-    const text = $('#msgText').value.trim();
-    if (!text || selectedNodeNum==null) return;
-    $('#msgText').value = '';
-    try {
-      await sendText(selectedNodeNum, text);
-      localStorage.setItem('meshtastic_last_thread', threadKeyFor(selectedNodeNum));
-    } catch (e) { log('Send failed: ' + e.message, 'err'); }
-  };
-  $('#msgText').addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#btnSend').click(); }
-  });
+            $('#btnSend').onclick = async () => {
+                const text = $('#msgText').value.trim();
+                if (!text || selectedNodeNum == null) return;
+                $('#msgText').value = '';
+                try {
+                    await sendText(selectedNodeNum, text);
+                    localStorage.setItem('meshtastic_last_thread', threadKeyFor(selectedNodeNum));
+                } catch (e) { log('Send failed: ' + e.message, 'err'); }
+            };
+            $('#msgText').addEventListener('keydown', e => {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#btnSend').click(); }
+            });
 
-  $('#publicChip').onclick = () => { selectThread(BROADCAST_NUM, 'Public (^all ch0)'); activateChatTab(); };
+            $('#publicChip').onclick = () => { selectThread(BROADCAST_NUM, 'Public (^all ch0)'); activateChatTab(); };
 
-  // Share bar controls
-  $('#btnSendUA').onclick = sendBrowserInfo;
-  $('#btnLocOnce').onclick = sendLocationOnce;
-  $('#btnLocStart').onclick = startLocationInterval;
-  $('#btnLocStop').onclick = stopLocationInterval;
+            // Share bar controls
+            $('#btnSendUA').onclick = sendBrowserInfo;
+            $('#btnLocOnce').onclick = sendLocationOnce;
+            $('#btnLocStart').onclick = startLocationInterval;
+            $('#btnLocStop').onclick = stopLocationInterval;
 
-  // ---------- Startup ----------
-  (async () => {
-    try {
-      await initProtobuf();
-      const ports = await navigator.serial?.getPorts?.() ?? [];
-      allowed = ports.length > 0;
-      if (allowed) { $('#btnConnect').disabled = false; $('#portInfo').textContent = 'Port pre-authorized'; }
-    } catch (e) { /* ignore */ }
+            // ---------- Startup ----------
+            (async () => {
+                try {
+                    await initProtobuf();
+                    const ports = await navigator.serial?.getPorts?.() ?? [];
+                    allowed = ports.length > 0;
+                    if (allowed) { $('#btnConnect').disabled = false; $('#portInfo').textContent = 'Port pre-authorized'; }
+                } catch (e) { /* ignore */ }
 
-    await tryAutoConnect();
+                await tryAutoConnect();
 
-    const lastKey = localStorage.getItem('meshtastic_last_thread');
-    if (lastKey) {
-      $('#chatHeader').innerHTML = `Chat with ${lastKey === 'public' ? 'Public (^all ch0)' : ('#' + lastKey)}`;
-    }
-  })();
+                const lastKey = localStorage.getItem('meshtastic_last_thread');
+                if (lastKey) {
+                    $('#chatHeader').innerHTML = `Chat with ${lastKey === 'public' ? 'Public (^all ch0)' : ('#' + lastKey)}`;
+                }
+            })();
 
-})();
-</script>
+        })();
+    </script>
 </body>
+
 </html>
